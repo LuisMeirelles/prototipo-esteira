@@ -84,6 +84,12 @@ Digite `/` na caixa de texto para ver a lista: `/img` (anexar imagem), `/enquete
 - Só quem criou ou o admin encerra. O resultado aparece para todos (a aba de cada um abre sozinha), com o vencedor destacado, e ninguém mais vota. Depois, quem criou ou o admin pode remover a enquete encerrada; criar outra também a substitui.
 - Limites: 3 criações a cada 10 minutos por pessoa, 30 votos por minuto.
 
+## Mensagens fixadas
+
+- Passe o mouse sobre uma mensagem e clique em 📌 para fixar (ou desafixar). **Qualquer pessoa** fixa e desafixa, e podem ficar **até 5** fixadas ao mesmo tempo; para fixar mais é preciso desafixar uma.
+- A mais recente aparece numa faixa no topo do chat (clique para ir até a mensagem). Com 2 ou mais, surge a aba "fixadas (N)" ao lado de "Local", com a lista completa, quem escreveu, quem fixou e os botões para ir até a mensagem ou desafixar.
+- A fixada sempre mostra o texto atual: editar a mensagem atualiza a fixada, e apagar a mensagem a desafixa.
+
 ## Camuflagem
 
 `/camuflagem` liga ou desliga. Ligada, quando o mouse sai do painel do chat ele é coberto por uma sessão decorativa igual aos outros três terminais, e o chat volta quando o mouse volta (inclusive ao sair da janela do navegador). Fica ligada por padrão e a preferência é guardada no navegador de cada pessoa. Só vale com mouse e em telas acima de 760px; em telas de toque ou estreitas não há outros terminais para imitar.
@@ -108,6 +114,7 @@ Ao conectar, o servidor envia a versão do frontend (hash dos arquivos web). Dep
 - Conteúdo de usuário nunca vai para `innerHTML`; CSP estrita, sem script/estilo inline.
 - Imagens: validadas por magic bytes e re-codificadas para WebP (remove EXIF e payloads). SVG é recusado e o limite é 6 MB.
 - Nomes de exibição: só letras latinas, números e pontuação simples, e únicos, para ninguém se passar por outra pessoa.
+- Fixar mensagem exige sessão, tem limite de 20 ações por minuto e de 5 fixadas.
 - Reações: um único emoji (um grafema), até 3 por pessoa e 12 emojis diferentes por mensagem.
 - Rate limit por IP e por usuário. Prod roda como não-root, com filesystem read-only, sem capabilities e sem porta do app exposta.
 

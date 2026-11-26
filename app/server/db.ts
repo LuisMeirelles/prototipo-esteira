@@ -65,6 +65,13 @@ db.exec(`
     PRIMARY KEY (message_id, user_id, emoji)
   );
 
+  -- mensagens fixadas (a mensagem continua soft-deleted em messages; ao apagar, store.ts remove o pin)
+  CREATE TABLE IF NOT EXISTS message_pins (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at INTEGER NOT NULL
+  );
+
   -- enquete atual (a migração acima já removeu as tabelas antigas de mesmo nome, se havia)
   CREATE TABLE IF NOT EXISTS polls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

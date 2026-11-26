@@ -209,7 +209,23 @@ a { color: var(--blue); }
 .tab[role='tab'] { cursor: pointer; }
 .tab[role='tab']:not(.active):hover { color: var(--bright); }
 .tab .dot { color: var(--orange); margin-left: 6px; }
-.chat.show-poll > .out, .chat.show-poll > .jump, .chat.show-poll > .dock { display: none; }
+.chat.show-side > .out, .chat.show-side > .jump, .chat.show-side > .dock, .chat.show-side > .pin-bar { display: none; }
+
+/* ---------- mensagens fixadas ---------- */
+.pin-bar { flex: none; display: flex; gap: 12px; align-items: baseline; padding: 4px 16px; border-bottom: 1px solid var(--bg2); font-size: 12px; min-width: 0; }
+.pin-text { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: baseline; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: var(--text); }
+.pin-text:hover .pin-snip { color: var(--bright); }
+.pin-ico { flex: none; }
+.pin-author { flex: none; color: var(--yellow); font-weight: 600; }
+.pin-snip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+.pin-bar .link { flex: none; font-size: 11px; }
+.pin-tag { color: var(--yellow); font-size: 11px; }
+.msg.pinned { border-left: 2px solid var(--yellow); }
+.pin-item { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+.pin-meta { color: var(--dim); font-size: 11px; }
+.pin-body { color: var(--bright); margin: 2px 0 6px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.pin-acts { display: flex; gap: 14px; font-size: 12px; }
+.pin-acts .danger { color: var(--red); }
 .poll-view { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 .poll-chip { display: inline-block; background: var(--orange); color: var(--bg); border-radius: 4px; padding: 0 8px; font-weight: 600; }
 .poll-chip.done { background: var(--green); }

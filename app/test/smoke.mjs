@@ -235,6 +235,42 @@ const np = (await req('GET', '/api/poll', { cookie: bob })).json.poll;
 ok(np.question === 'nova' && !np.closedAt && np.id !== bp.id, 'a nova enquete está aberta');
 ok((await CL(alice, np.id)).status === 200 && (await req('DELETE', `/api/poll/${np.id}`, { cookie: alice })).status === 200, 'admin encerra e remove enquete de outro');
 
+// fixar mensagem (qualquer usuário; até 5; apagar desafixa; editar atualiza)
+const carol = await login('Carol'); // usuário novo: limites de mensagem próprios
+const pm = [];
+for (let i = 1; i <= 6; i++) pm.push((await req('POST', '/api/messages', { cookie: carol, body: { body: `fixar ${i}` } })).json.id);
+const PIN = (c, id, o = {}) => req('PUT', `/api/messages/${id}/pin`, { cookie: c, ...o });
+const UNPIN = (c, id, o = {}) => req('DELETE', `/api/messages/${id}/pin`, { cookie: c, ...o });
+const pinsOf = async (c) => (await req('GET', '/api/pins', { cookie: c })).json.pins;
+const wsPin = await wsOpen(alice, ORIGIN);
+ok((await req('GET', '/api/pins')).status === 401, 'listar fixadas sem sessão => 401');
+ok((await PIN(null, pm[0])).status === 401, 'fixar sem sessão => 401');
+ok((await PIN(bob, pm[0], { origin: 'https://evil.com' })).status === 403, 'fixar com Origin errada => 403');
+ok((await PIN(bob, pm[0], { origin: null })).status === 403, 'fixar sem Origin => 403');
+ok((await PIN(bob, '1%20OR%201=1')).status === 404, 'id inválido ao fixar => 404');
+ok((await PIN(bob, 999999)).status === 404, 'fixar mensagem inexistente => 404');
+ok((await PIN(bob, pm[0])).status === 200, 'qualquer usuário fixa (bob fixa msg da carol)');
+ok((await PIN(bob, pm[0])).status === 200 && (await pinsOf(alice)).length === 1, 'fixar de novo é idempotente');
+await sleep(150);
+ok(wsPin.events.some((e) => e.t === 'pins' && e.pins.length === 1 && e.pins[0].id === pm[0]), 'ws avisa a fixada');
+for (const id of pm.slice(1, 5)) await PIN(alice, id);
+ok((await pinsOf(bob)).length === 5, 'até 5 fixadas');
+const full = await PIN(alice, pm[5]);
+ok(full.status === 409 && full.json.error === 'too_many_pins', 'sexta fixada => 409');
+ok((await pinsOf(bob))[0].id === pm[4], 'a mais recente vem primeiro');
+ok((await UNPIN(null, pm[0])).status === 401, 'desafixar sem sessão => 401');
+ok((await UNPIN(alice, pm[0])).status === 200 && (await pinsOf(bob)).length === 4, 'qualquer usuário desafixa (alice desafixa a do bob)');
+ok((await PIN(alice, pm[5])).status === 200, 'depois de desafixar há vaga');
+await req('PATCH', `/api/messages/${pm[5]}`, { cookie: carol, body: { body: 'texto novo' } });
+ok((await pinsOf(bob)).find((p) => p.id === pm[5])?.snippet === 'texto novo', 'editar atualiza o texto da fixada');
+wsPin.events.length = 0;
+ok((await req('DELETE', `/api/messages/${pm[5]}`, { cookie: carol })).status === 200, 'autora apaga mensagem fixada');
+await sleep(150);
+ok(!(await pinsOf(bob)).some((p) => p.id === pm[5]), 'apagar a mensagem desafixa');
+ok(wsPin.events.some((e) => e.t === 'pins' && !e.pins.some((p) => p.id === pm[5])), 'ws avisa que a fixada saiu');
+ok((await PIN(bob, pm[5])).status === 404, 'fixar mensagem apagada => 404');
+wsPin.close();
+
 // logout invalida sessão
 const lo = await req('POST', '/api/logout', { cookie: bob });
 ok(lo.status === 200 && (await req('GET', '/api/me', { cookie: bob })).status === 401, 'logout invalida sessão');

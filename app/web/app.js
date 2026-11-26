@@ -32,6 +32,9 @@ const state = {
   poll: null,
   version: null,
   firstUnseenId: null,
+  pins: [],
+  pinIds: new Set(),
+  maxPins: 5,
 };
 let stopFake = null;
 
@@ -71,6 +74,7 @@ const ERRORS = {
   invalid_option: 'opção inválida',
   not_found: 'a enquete não existe mais',
   poll_closed: 'a enquete já foi encerrada',
+  too_many_pins: 'limite de mensagens fixadas atingido: desafixe uma antes',
   poll_open: 'encerre a enquete antes de removê-la',
   too_many_reactions: 'limite de reações atingido nesta mensagem',
   invalid_emoji: 'use um único emoji',
@@ -191,6 +195,10 @@ function buildMsg(m, prev) {
     if (m.editedAt && !m.deleted) head.append(h('span', 'edited', '(editado)'));
     row.append(head);
   }
+  if (!m.deleted && state.pinIds.has(m.id)) {
+    row.classList.add('pinned');
+    row.append(h('div', 'pin-tag', '📌 fixada'));
+  }
 
   if (m.replyTo) {
     const ref = h('div', 'reply-ref');
@@ -214,6 +222,7 @@ function buildMsg(m, prev) {
     }
     const acts = h('div', 'acts');
     acts.append(actBtn('↩', 'responder', () => setReply(m)));
+    acts.append(actBtn('📌', state.pinIds.has(m.id) ? 'desafixar' : 'fixar', () => togglePin(m)));
     if (m.userId === state.me.id) acts.append(actBtn('✎', 'editar', () => startEdit(m, wrap)));
     if (m.userId === state.me.id || state.admin) acts.append(actBtn('✕', 'apagar', () => removeMsg(m)));
     row.append(acts);
@@ -269,7 +278,7 @@ $('jump').addEventListener('click', () => {
 // "Vendo o chat" = guia visível, janela com foco e chat não coberto pela camuflagem. Mensagem que chega fora
 // disso fica "não vista" e aparece em três lugares: título da guia, favicon e pílula sobre a camuflagem.
 const covered = () => camoOn && !camoEl.hidden;
-const watching = () => !document.hidden && document.hasFocus() && !covered() && !pollShown;
+const watching = () => !document.hidden && document.hasFocus() && !covered() && view === 'chat';
 
 const FAVICON = '/favicon.svg';
 const faviconEl = document.querySelector('link[rel="icon"]');
@@ -673,6 +682,9 @@ function onWsMessage(ev) {
     case 'poll':
       setPoll(e.poll);
       break;
+    case 'pins':
+      setPins(e.pins);
+      break;
     case 'hello':
       onServerVersion(e.version);
       break;
@@ -702,6 +714,7 @@ function connect() {
     if (reconnected) {
       await loadHistory(true); // recupera o que perdeu enquanto offline
       await loadPoll();
+      await loadPins();
     }
   });
   ws.addEventListener('message', onWsMessage);
@@ -1114,14 +1127,21 @@ document.documentElement.addEventListener('mouseleave', () => {
 const pollView = $('poll-view');
 const pollModal = $('poll-modal');
 let pollShown = false;
+let view = 'chat'; // 'chat' | 'poll' | 'pins': só uma por vez; as duas últimas escondem o chat
 
-function showView(poll) {
-  pollShown = poll && !!state.poll;
-  chatPane.classList.toggle('show-poll', pollShown);
-  pollView.hidden = !pollShown;
-  $('tab-chat').classList.toggle('active', !pollShown);
-  $('tab-poll').classList.toggle('active', pollShown);
-  if (pollShown) renderPoll();
+// aceita true/false (legado: enquete ou chat) ou o nome da visão
+function showView(which) {
+  const want = which === true ? 'poll' : which === false ? 'chat' : which;
+  view = want === 'poll' && state.poll ? 'poll' : want === 'pins' && state.pins.length > 1 ? 'pins' : 'chat';
+  pollShown = view === 'poll';
+  chatPane.classList.toggle('show-side', view !== 'chat');
+  pollView.hidden = view !== 'poll';
+  $('pins-view').hidden = view !== 'pins';
+  $('tab-chat').classList.toggle('active', view === 'chat');
+  $('tab-poll').classList.toggle('active', view === 'poll');
+  $('tab-pins').classList.toggle('active', view === 'pins');
+  if (view === 'poll') renderPoll();
+  else if (view === 'pins') renderPinsView();
   else {
     input.focus();
     maybeClear();
@@ -1140,7 +1160,7 @@ function setPoll(p) {
   $('tab-poll').hidden = !p;
   if (had && !p) {
     if (pollShown) toast('a enquete foi removida');
-    showView(false);
+    if (view === 'poll') showView('chat');
   }
   // encerrada por alguém (criador ou admin): abre o resultado para todos
   const justClosed = p && p.closedAt && had && had.id === p.id && !had.closedAt;
@@ -1241,9 +1261,9 @@ async function removePoll() {
   }
 }
 
-for (const id of ['tab-chat', 'tab-poll']) {
+for (const id of ['tab-chat', 'tab-poll', 'tab-pins']) {
   const tab = $(id);
-  const go = () => showView(id === 'tab-poll');
+  const go = () => showView(id === 'tab-poll' ? 'poll' : id === 'tab-pins' ? 'pins' : 'chat');
   tab.addEventListener('click', go);
   tab.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -1290,6 +1310,97 @@ $('poll-create').addEventListener('click', async () => {
     err.hidden = false;
   }
 });
+
+/* ---------- fixadas ---------- */
+
+const pinTimeFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const pinText = (p) => p.snippet || (p.images ? '[imagem]' : '');
+
+async function loadPins() {
+  try {
+    const data = await api('GET', '/api/pins');
+    state.maxPins = data.max ?? state.maxPins;
+    setPins(data.pins);
+  } catch {}
+}
+
+function setPins(pins) {
+  const before = state.pinIds;
+  state.pins = pins;
+  state.pinIds = new Set(pins.map((p) => p.id));
+  // só quem mudou de fixada para não fixada (ou o contrário) precisa refazer o balão e o botão 📌
+  for (const id of new Set([...before, ...state.pinIds])) {
+    if (before.has(id) !== state.pinIds.has(id)) rebuild(id);
+  }
+  $('tab-pins').hidden = pins.length < 2;
+  $('tab-pins-title').textContent = `fixadas (${pins.length})`;
+  if (view === 'pins' && pins.length < 2) showView('chat');
+  // autor ou quem fixou ainda fora do cache (conta nova): aparece como "alguém" até recarregar
+  if (pins.some((p) => !state.users.has(p.userId) || !state.users.has(p.pinnedBy))) {
+    loadUsers().then(() => {
+      renderPinBar();
+      if (view === 'pins') renderPinsView();
+    });
+  }
+  renderPinBar();
+  if (view === 'pins') renderPinsView();
+}
+
+function goToMessage(id) {
+  showView('chat');
+  requestAnimationFrame(() => scrollToMsg(id));
+}
+
+// a mais recente fica numa faixa no topo do chat; as outras, na aba
+function renderPinBar() {
+  const bar = $('pin-bar');
+  const top = state.pins[0];
+  bar.hidden = !top;
+  if (!top) return bar.replaceChildren();
+  const text = h('button', 'pin-text');
+  text.type = 'button';
+  text.title = 'ir para a mensagem fixada';
+  text.append(h('span', 'pin-ico', '📌'), h('span', 'pin-author', userOf(top.userId).name), h('span', 'pin-snip', pinText(top)));
+  text.addEventListener('click', () => goToMessage(top.id));
+  bar.replaceChildren(text);
+  if (state.pins.length > 1) {
+    const more = h('button', 'link', `+${state.pins.length - 1} fixadas`);
+    more.type = 'button';
+    more.addEventListener('click', () => showView('pins'));
+    bar.append(more);
+  }
+}
+
+function renderPinsView() {
+  const box = h('div');
+  box.append(h('span', 'poll-chip', 'Fixadas'));
+  box.append(h('div', 'poll-meta', `${state.pins.length} de ${state.maxPins} · a mais recente também fica no topo do chat`));
+  for (const p of state.pins) {
+    const item = h('div', 'pin-item');
+    const by = p.pinnedBy === p.userId ? '' : ` · fixada por ${userOf(p.pinnedBy).name}`;
+    item.append(h('div', 'pin-meta', `${userOf(p.userId).name} · ${pinTimeFmt.format(p.createdAt)}${by}`));
+    item.append(h('div', 'pin-body', pinText(p)));
+    const acts = h('div', 'pin-acts');
+    const go = h('button', 'link', '[ir para a mensagem]');
+    go.type = 'button';
+    go.addEventListener('click', () => goToMessage(p.id));
+    const un = h('button', 'link danger', '[desafixar]');
+    un.type = 'button';
+    un.addEventListener('click', () => togglePin({ id: p.id }));
+    acts.append(go, un);
+    item.append(acts);
+    box.append(item);
+  }
+  $('pins-view').replaceChildren(box);
+}
+
+async function togglePin(m) {
+  try {
+    await api(state.pinIds.has(m.id) ? 'DELETE' : 'PUT', `/api/messages/${m.id}/pin`);
+  } catch (e) {
+    toast(e);
+  }
+}
 
 /* ---------- login e boot ---------- */
 
@@ -1382,6 +1493,7 @@ async function boot() {
     toast(e);
   }
   await loadPoll();
+  await loadPins();
   connect();
   input.focus();
 }

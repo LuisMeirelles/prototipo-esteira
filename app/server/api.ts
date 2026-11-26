@@ -14,6 +14,11 @@ import {
   createPoll,
   deletePoll,
   getPoll,
+  isPinned,
+  MAX_PINS,
+  listPins,
+  pinMessage,
+  unpinMessage,
   rawPoll,
   votePoll,
   deleteMessage,
@@ -166,6 +171,7 @@ export function registerApi(app: FastifyInstance) {
     editMessage(m.id, body);
     const v = getMessageView(m.id)!;
     broadcast({ t: 'edit', message: v.message });
+    if (isPinned(m.id)) broadcast({ t: 'pins', pins: listPins() }); // a fixada mostra o texto atual
     return { ok: true };
   });
 
@@ -180,8 +186,9 @@ export function registerApi(app: FastifyInstance) {
     if (!m || m.deleted_at) return bad(reply, 'not_found', 404);
     if (m.user_id !== u.id && !isAdmin(u)) return bad(reply, 'forbidden', 403);
 
-    deleteMessage(m.id);
+    const wasPinned = deleteMessage(m.id);
     broadcast({ t: 'del', id: m.id });
+    if (wasPinned) broadcast({ t: 'pins', pins: listPins() }); // apagar desafixa
     return { ok: true };
   });
 
@@ -200,6 +207,32 @@ export function registerApi(app: FastifyInstance) {
     broadcast({ t: 'react', id: m.id, reactions: getMessageView(m.id)!.message.reactions });
     return { ok: true };
   };
+  /* ---------- fixadas (qualquer usuário fixa e desafixa; no máximo MAX_PINS) ---------- */
+
+  app.get('/api/pins', async (req, reply) => {
+    if (!me(req, reply)) return;
+    return { pins: listPins(), max: MAX_PINS };
+  });
+
+  const pin = (on: boolean) => async (req: FastifyRequest, reply: FastifyReply) => {
+    const u = me(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    if (!ID_RE.test(id)) return bad(reply, 'not_found', 404);
+    if (!allow(`pin:${u.id}`, 20, 60_000)) return limited(reply);
+    const m = rawMessage(Number(id));
+    if (!m || m.deleted_at) return bad(reply, 'not_found', 404);
+    if (on) {
+      if (pinMessage(m.id, u.id) === 'full') return bad(reply, 'too_many_pins', 409);
+    } else {
+      unpinMessage(m.id);
+    }
+    broadcast({ t: 'pins', pins: listPins() });
+    return { ok: true };
+  };
+  app.put('/api/messages/:id/pin', pin(true));
+  app.delete('/api/messages/:id/pin', pin(false));
+
   /* ---------- enquete ---------- */
 
   app.get('/api/poll', async (req, reply) => {

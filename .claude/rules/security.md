@@ -18,6 +18,7 @@ O modelo de ameaça é um colega da mesma rede tentando invadir. Qualquer altera
 ## Autorização
 - Operação sobre recurso de alguém valida dono (`m.user_id === u.id`) ou admin (`u.is_admin === 1`). Editar mensagem é **só do dono**, nem admin edita.
 - Mídia ainda não anexada só é visível para quem enviou; anexar mídia exige ser dono e não ter sido usada.
+- Fixar mensagem é permitido a qualquer usuário autenticado (decisão do projeto), com limite de 5 fixadas e rate limit; fixar mensagem inexistente ou apagada dá 404.
 - Enquete: criar exige sessão; encerrar e remover são só do criador ou admin (403 para os outros). Votar em enquete encerrada devolve 409 e remover uma aberta também (409).
 - IDs vindos de URL/corpo passam por regex (`ID_RE`, `MEDIA_RE`) antes de tocar no banco.
 

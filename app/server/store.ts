@@ -360,13 +360,79 @@ export function editMessage(id: number, body: string) {
   db.prepare('UPDATE messages SET body = ?, edited_at = ? WHERE id = ? AND deleted_at IS NULL').run(body, now(), id);
 }
 
-export function deleteMessage(id: number) {
+/** Devolve true se a mensagem estava fixada (apagar desafixa, e o chamador precisa avisar os clientes). */
+export function deleteMessage(id: number): boolean {
   const imgs = db.prepare('SELECT id FROM media WHERE message_id = ?').all(id) as { id: string }[];
+  let wasPinned = false;
   tx(() => {
     db.prepare("UPDATE messages SET body = '', deleted_at = ? WHERE id = ?").run(now(), id);
     db.prepare('DELETE FROM reactions WHERE message_id = ?').run(id);
+    wasPinned = Number(db.prepare('DELETE FROM message_pins WHERE message_id = ?').run(id).changes) > 0;
   });
   for (const i of imgs) removeMedia(i.id);
+  return wasPinned;
+}
+
+/* ---------- fixadas ---------- */
+
+export const MAX_PINS = 5;
+
+export interface PinView {
+  id: number;
+  userId: number; // autor da mensagem
+  snippet: string;
+  images: number;
+  createdAt: number;
+  pinnedBy: number;
+  pinnedAt: number;
+}
+
+/** Mais recente primeiro. O texto vem da mensagem atual (editar atualiza), nunca de uma cópia. */
+export function listPins(): PinView[] {
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.user_id, m.body, m.created_at, p.user_id AS pinned_by, p.created_at AS pinned_at,
+        (SELECT COUNT(*) FROM media x WHERE x.message_id = m.id AND x.kind = 'image') AS images
+       FROM message_pins p JOIN messages m ON m.id = p.message_id
+       WHERE m.deleted_at IS NULL ORDER BY p.created_at DESC, p.message_id DESC`,
+    )
+    .all() as unknown as {
+    id: number;
+    user_id: number;
+    body: string;
+    created_at: number;
+    pinned_by: number;
+    pinned_at: number;
+    images: number;
+  }[];
+  return rows.map((r) => ({
+    id: r.id,
+    userId: r.user_id,
+    snippet: r.body.replace(/\s+/g, ' ').trim().slice(0, 200),
+    images: Number(r.images),
+    createdAt: r.created_at,
+    pinnedBy: r.pinned_by,
+    pinnedAt: r.pinned_at,
+  }));
+}
+
+export function isPinned(messageId: number): boolean {
+  return !!db.prepare('SELECT 1 FROM message_pins WHERE message_id = ?').get(messageId);
+}
+
+/** 'full' se já há MAX_PINS (repetir uma já fixada não conta). Contagem e insert na mesma transação. */
+export function pinMessage(messageId: number, userId: number): 'ok' | 'full' {
+  return tx(() => {
+    if (isPinned(messageId)) return 'ok';
+    const n = (db.prepare('SELECT COUNT(*) AS c FROM message_pins').get() as unknown as { c: number }).c;
+    if (n >= MAX_PINS) return 'full';
+    db.prepare('INSERT INTO message_pins (message_id, user_id, created_at) VALUES (?,?,?)').run(messageId, userId, now());
+    return 'ok';
+  });
+}
+
+export function unpinMessage(messageId: number) {
+  db.prepare('DELETE FROM message_pins WHERE message_id = ?').run(messageId);
 }
 
 /* ---------- reações ---------- */

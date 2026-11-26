@@ -48,14 +48,17 @@
         <span class="tab active" id="tab-chat" role="tab" tabindex="0"><span class="star">✳</span><span class="title">chat · geral</span><span class="x">×</span></span>
         <span class="tab">Local</span>
         <span class="tab" id="tab-poll" role="tab" tabindex="0" hidden><span class="star">✳</span><span class="title" id="tab-poll-title">enquete</span></span>
+        <span class="tab" id="tab-pins" role="tab" tabindex="0" hidden><span class="star">✳</span><span class="title" id="tab-pins-title">fixadas</span></span>
         <span class="plus">＋</span>
       </div>
+      <div id="pin-bar" class="pin-bar" hidden></div>
 
       <div id="scroller" class="out scroll">
         <div id="messages" class="messages" aria-live="polite"></div>
       </div>
       <button id="jump" class="jump" type="button" hidden>↓ novas mensagens</button>
       <div id="poll-view" class="poll-view" hidden></div>
+      <div id="pins-view" class="poll-view" hidden></div>
 
       <div class="dock">
         <div id="typing" class="think" hidden aria-live="polite"><span id="typing-spin" class="spin">✻</span><span id="typing-text" class="verb"></span></div>
