@@ -163,8 +163,24 @@ function imageEl(img) {
   return b;
 }
 
+// Pin desenhado em SVG de contorno (não existe glifo de texto de pin, só o emoji colorido). Pega a cor e o
+// tamanho do texto, como ↩ ✎ ✕; o traço vem do CSS (.pin-svg). Montado por DOM, sem innerHTML.
+function pinIcon() {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('class', 'pin-svg');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('d', 'M8 3h8M9.5 3v6L6.5 13h11l-3-4V3M12 13v8');
+  svg.append(path);
+  return svg;
+}
+
+// label pode ser texto (↩ ✎ ✕) ou um nó (o pin em SVG)
 function actBtn(label, title, fn) {
-  const b = h('button', 'act', label);
+  const b = h('button', 'act');
+  b.append(label);
   b.type = 'button';
   b.title = title;
   b.setAttribute('aria-label', title);
@@ -197,7 +213,9 @@ function buildMsg(m, prev) {
   }
   if (!m.deleted && state.pinIds.has(m.id)) {
     row.classList.add('pinned');
-    row.append(h('div', 'pin-tag', '📌 fixada'));
+    const tag = h('div', 'pin-tag');
+    tag.append(pinIcon(), ' fixada');
+    row.append(tag);
   }
 
   if (m.replyTo) {
@@ -222,7 +240,7 @@ function buildMsg(m, prev) {
     }
     const acts = h('div', 'acts');
     acts.append(actBtn('↩', 'responder', () => setReply(m)));
-    acts.append(actBtn('📌', state.pinIds.has(m.id) ? 'desafixar' : 'fixar', () => togglePin(m)));
+    acts.append(actBtn(pinIcon(), state.pinIds.has(m.id) ? 'desafixar' : 'fixar', () => togglePin(m)));
     if (m.userId === state.me.id) acts.append(actBtn('✎', 'editar', () => startEdit(m, wrap)));
     if (m.userId === state.me.id || state.admin) acts.append(actBtn('✕', 'apagar', () => removeMsg(m)));
     row.append(acts);
@@ -1328,7 +1346,7 @@ function setPins(pins) {
   const before = state.pinIds;
   state.pins = pins;
   state.pinIds = new Set(pins.map((p) => p.id));
-  // só quem mudou de fixada para não fixada (ou o contrário) precisa refazer o balão e o botão 📌
+  // só quem mudou de fixada para não fixada (ou o contrário) precisa refazer o balão e o botão de fixar
   for (const id of new Set([...before, ...state.pinIds])) {
     if (before.has(id) !== state.pinIds.has(id)) rebuild(id);
   }
@@ -1360,7 +1378,9 @@ function renderPinBar() {
   const text = h('button', 'pin-text');
   text.type = 'button';
   text.title = 'ir para a mensagem fixada';
-  text.append(h('span', 'pin-ico', '📌'), h('span', 'pin-author', userOf(top.userId).name), h('span', 'pin-snip', pinText(top)));
+  const ico = h('span', 'pin-ico');
+  ico.append(pinIcon());
+  text.append(ico, h('span', 'pin-author', userOf(top.userId).name), h('span', 'pin-snip', pinText(top)));
   text.addEventListener('click', () => goToMessage(top.id));
   bar.replaceChildren(text);
   if (state.pins.length > 1) {

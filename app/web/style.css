@@ -215,7 +215,8 @@ a { color: var(--blue); }
 .pin-bar { flex: none; display: flex; gap: 12px; align-items: baseline; padding: 4px 16px; border-bottom: 1px solid var(--bg2); font-size: 12px; min-width: 0; }
 .pin-text { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: baseline; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: var(--text); }
 .pin-text:hover .pin-snip { color: var(--bright); }
-.pin-ico { flex: none; }
+.pin-ico { flex: none; color: var(--yellow); }
+.pin-svg { width: 1em; height: 1em; vertical-align: -0.14em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .pin-author { flex: none; color: var(--yellow); font-weight: 600; }
 .pin-snip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
 .pin-bar .link { flex: none; font-size: 11px; }

@@ -86,7 +86,7 @@ Digite `/` na caixa de texto para ver a lista: `/img` (anexar imagem), `/enquete
 
 ## Mensagens fixadas
 
-- Passe o mouse sobre uma mensagem e clique em 📌 para fixar (ou desafixar). **Qualquer pessoa** fixa e desafixa, e podem ficar **até 5** fixadas ao mesmo tempo; para fixar mais é preciso desafixar uma.
+- Passe o mouse sobre uma mensagem e clique no ícone de pin para fixar (ou desafixar). **Qualquer pessoa** fixa e desafixa, e podem ficar **até 5** fixadas ao mesmo tempo; para fixar mais é preciso desafixar uma.
 - A mais recente aparece numa faixa no topo do chat (clique para ir até a mensagem). Com 2 ou mais, surge a aba "fixadas (N)" ao lado de "Local", com a lista completa, quem escreveu, quem fixou e os botões para ir até a mensagem ou desafixar.
 - A fixada sempre mostra o texto atual: editar a mensagem atualiza a fixada, e apagar a mensagem a desafixa.
 
