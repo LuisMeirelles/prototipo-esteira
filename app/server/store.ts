@@ -371,13 +371,24 @@ export function deleteMessage(id: number) {
 
 /* ---------- reações ---------- */
 
+const MAX_EMOJIS_PER_MESSAGE = 12;
+const MAX_REACTIONS_PER_USER = 3;
+
 export function toggleReaction(messageId: number, userId: number, emoji: string, on: boolean): boolean {
   if (on) {
     const distinct = db
       .prepare('SELECT COUNT(DISTINCT emoji) AS c FROM reactions WHERE message_id = ?')
       .get(messageId) as { c: number };
     const has = db.prepare('SELECT 1 FROM reactions WHERE message_id = ? AND emoji = ?').get(messageId, emoji);
-    if (!has && distinct.c >= 20) return false;
+    if (!has && distinct.c >= MAX_EMOJIS_PER_MESSAGE) return false;
+    // sem teto por usuário, uma pessoa sozinha enche a mensagem de emojis
+    const mine = db
+      .prepare('SELECT COUNT(*) AS c FROM reactions WHERE message_id = ? AND user_id = ?')
+      .get(messageId, userId) as { c: number };
+    const mineHas = db
+      .prepare('SELECT 1 FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?')
+      .get(messageId, userId, emoji);
+    if (!mineHas && mine.c >= MAX_REACTIONS_PER_USER) return false;
     db.prepare('INSERT OR IGNORE INTO reactions (message_id, user_id, emoji) VALUES (?,?,?)').run(messageId, userId, emoji);
   } else {
     db.prepare('DELETE FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?').run(messageId, userId, emoji);

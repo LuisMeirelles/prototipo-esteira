@@ -3,114 +3,111 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <title>Chat</title>
+  <meta name="color-scheme" content="dark">
+  <title>✳ chat</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
   <section id="login" class="login" hidden>
-    <div class="login-card">
-      <div class="logo">✺</div>
-      <h1>Chat</h1>
-      <p>Conversa em grupo da equipe.</p>
-      <div class="tabs" role="tablist">
-        <button id="tab-login" class="tab active" type="button" role="tab">Entrar</button>
-        <button id="tab-register" class="tab" type="button" role="tab">Criar conta</button>
-      </div>
-      <form id="auth-form" class="auth-form">
-        <label for="auth-user">Usuário</label>
-        <input id="auth-user" name="username" maxlength="24" autocomplete="username" autocapitalize="none" spellcheck="false" required>
-        <label for="auth-pass">Senha</label>
-        <input id="auth-pass" name="password" type="password" maxlength="128" autocomplete="current-password" required>
-        <div id="invite-row" hidden>
-          <label for="auth-invite">Código de convite</label>
-          <input id="auth-invite" name="invite" maxlength="128" autocomplete="off" spellcheck="false">
-          <small>Usuário: 3 a 24 caracteres (letras minúsculas, números, . _ -). Senha: mínimo 8.</small>
+    <div class="login-box pane">
+      <div class="tabs"><span class="tab dim">Terminal</span><span class="tab active"><span class="star">✳</span><span class="title">login</span><span class="x">×</span></span></div>
+      <div class="login-body">
+        <p class="dim">$ chat --acesso</p>
+        <div class="mode">
+          <button id="tab-login" class="link active" type="button">[entrar]</button>
+          <button id="tab-register" class="link" type="button">[criar conta]</button>
         </div>
-        <button id="auth-submit" class="btn primary big" type="submit">Entrar</button>
-        <p id="login-error" class="error" hidden></p>
-      </form>
+        <form id="auth-form" class="auth-form">
+          <label for="auth-user">usuário ›</label>
+          <input id="auth-user" name="username" maxlength="24" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+          <label for="auth-pass">senha ›</label>
+          <input id="auth-pass" name="password" type="password" maxlength="128" autocomplete="current-password" required>
+          <div id="invite-row" hidden>
+            <label for="auth-invite">convite ›</label>
+            <input id="auth-invite" name="invite" maxlength="128" autocomplete="off" spellcheck="false">
+            <p class="dim small">usuário: 3 a 24 caracteres (a-z 0-9 . _ -) · senha: mínimo 8</p>
+          </div>
+          <button id="auth-submit" class="btn" type="submit">↵ entrar</button>
+          <p id="login-error" class="error" hidden></p>
+        </form>
+      </div>
     </div>
   </section>
 
-  <div id="app" class="app" hidden>
-    <aside id="sidebar" class="sidebar">
-      <div class="brand"><span class="logo">✺</span> Chat</div>
-      <div class="side-title">Online — <span id="online-count">0</span></div>
-      <ul id="online-list" class="online-list"></ul>
-      <div class="side-foot">
-        <button id="me-btn" class="me-btn" type="button" title="Editar perfil">
-          <span id="me-avatar" class="avatar"></span>
-          <span id="me-name" class="me-name"></span>
-        </button>
-        <button id="notif-btn" class="icon-btn" type="button" title="Notificações" aria-label="Notificações">🔔</button>
-        <button id="theme-btn" class="icon-btn" type="button" title="Alternar tema" aria-label="Alternar tema">◐</button>
-        <button id="logout-btn" class="icon-btn" type="button" title="Sair" aria-label="Sair">⏻</button>
+  <div id="app" class="grid" hidden>
+    <section class="pane fake" id="fake-0"></section>
+    <section class="pane fake" id="fake-1"></section>
+
+    <section class="pane chat" id="chat-pane">
+      <div class="tabs">
+        <span class="tab dim">Terminal</span>
+        <span class="tab active"><span class="star">✳</span><span class="title">chat · geral</span><span class="x">×</span></span>
+        <span class="tab">Local</span>
+        <span class="plus">＋</span>
       </div>
-    </aside>
-    <div id="scrim" class="scrim" hidden></div>
 
-    <main class="main">
-      <header class="topbar">
-        <button id="menu-btn" class="icon-btn menu-btn" type="button" aria-label="Menu">☰</button>
-        <div class="room"><span class="hash">#</span> geral</div>
-        <div class="room-sub"><span id="online-count-2">0</span> online</div>
-      </header>
-
-      <div id="scroller" class="scroller">
+      <div id="scroller" class="out scroll">
         <div id="messages" class="messages" aria-live="polite"></div>
       </div>
-      <button id="jump" class="jump" type="button" hidden>↓ Novas mensagens</button>
+      <button id="jump" class="jump" type="button" hidden>↓ novas mensagens</button>
 
-      <div class="composer-wrap">
-        <div id="typing" class="typing" aria-live="polite"></div>
-        <div class="composer" id="composer">
+      <div class="dock">
+        <div id="typing" class="think" hidden aria-live="polite"><span id="typing-spin" class="spin">✻</span><span id="typing-text" class="verb"></span></div>
+        <div id="status" class="status"></div>
+        <div class="gap"></div>
+        <div id="footer" class="foot"></div>
+        <div class="path"><span class="cwd" id="cwd">~/chat</span><span class="dim"> · (geral)</span></div>
+
+        <div class="prompt-wrap" id="composer">
+          <div id="cmd-pop" class="suggest" hidden></div>
           <div id="mention-pop" class="suggest" hidden></div>
           <div id="emoji-pop" class="suggest emoji-pop" hidden></div>
           <div id="reply-bar" class="reply-bar" hidden>
             <span id="reply-text"></span>
-            <button id="reply-cancel" class="icon-btn small" type="button" aria-label="Cancelar resposta">✕</button>
+            <button id="reply-cancel" class="link" type="button" aria-label="Cancelar resposta">esc ✕</button>
           </div>
           <div id="previews" class="previews" hidden></div>
-          <div class="composer-row">
-            <button id="attach-btn" class="icon-btn" type="button" title="Anexar imagem" aria-label="Anexar imagem">＋</button>
-            <input id="file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
-            <textarea id="input" rows="1" maxlength="4000" placeholder="Escreva uma mensagem…" aria-label="Mensagem"></textarea>
-            <button id="send-btn" class="send-btn" type="button" title="Enviar" aria-label="Enviar" disabled>↑</button>
+          <div class="prompt">
+            <span class="chev">›</span>
+            <textarea id="input" rows="1" maxlength="4000" placeholder="escreva uma mensagem" aria-label="Mensagem" spellcheck="false"></textarea>
+            <span class="enter" aria-hidden="true">↵</span>
           </div>
         </div>
-        <div class="hint">Enter envia · Shift+Enter quebra linha · <b>/emoji</b> abre os emojis (ex.: /emoji coração) · <b>@nome</b> menciona alguém, <b>@todos</b> a sala · imagens aparecem como spoiler</div>
+        <input id="file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+        <div class="hint">↵ envia · ⇧↵ nova linha · <b>/emoji</b> emojis · <b>/img</b> imagem · <b>/perfil</b> · <b>/notif</b> · <b>/sair</b> · <b>@nome</b> menciona · duplo clique responde</div>
       </div>
-    </main>
+    </section>
+
+    <section class="pane fake" id="fake-2"></section>
   </div>
 
-  <div id="picker" class="picker" hidden></div>
-
   <div id="profile-modal" class="modal" hidden>
-    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Editar perfil">
-      <h2>Seu perfil</h2>
-      <div class="profile-avatar">
-        <span id="profile-avatar" class="avatar big"></span>
-        <button id="avatar-btn" class="btn" type="button">Trocar foto</button>
-        <input id="avatar-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
-      </div>
-      <label for="profile-name">Nome de usuário</label>
-      <input id="profile-name" maxlength="32" autocomplete="off">
-      <p id="profile-error" class="error" hidden></p>
-      <details class="pw-box">
-        <summary>Trocar senha</summary>
-        <label for="pw-current">Senha atual</label>
-        <input id="pw-current" type="password" maxlength="128" autocomplete="current-password">
-        <label for="pw-next">Nova senha (mínimo 8)</label>
-        <input id="pw-next" type="password" maxlength="128" autocomplete="new-password">
-        <button id="pw-save" class="btn" type="button">Alterar senha</button>
-        <p id="pw-msg" class="error" hidden></p>
-      </details>
-      <div class="modal-actions">
-        <button id="profile-close" class="btn" type="button">Fechar</button>
-        <button id="profile-save" class="btn primary" type="button">Salvar</button>
+    <div class="modal-card pane" role="dialog" aria-modal="true" aria-label="Editar perfil">
+      <div class="tabs"><span class="tab active"><span class="star">✳</span><span class="title">perfil</span></span></div>
+      <div class="modal-body">
+        <div class="profile-avatar">
+          <span id="profile-avatar" class="av big"></span>
+          <button id="avatar-btn" class="link" type="button">[trocar foto]</button>
+          <input id="avatar-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+        </div>
+        <label for="profile-name">nome ›</label>
+        <input id="profile-name" maxlength="32" autocomplete="off">
+        <p id="profile-error" class="error" hidden></p>
+        <details class="pw-box">
+          <summary>trocar senha</summary>
+          <label for="pw-current">senha atual ›</label>
+          <input id="pw-current" type="password" maxlength="128" autocomplete="current-password">
+          <label for="pw-next">nova senha (mín. 8) ›</label>
+          <input id="pw-next" type="password" maxlength="128" autocomplete="new-password">
+          <button id="pw-save" class="link" type="button">[alterar senha]</button>
+          <p id="pw-msg" class="error" hidden></p>
+        </details>
+        <div class="modal-actions">
+          <button id="profile-close" class="link" type="button">[fechar]</button>
+          <button id="profile-save" class="btn" type="button">↵ salvar</button>
+        </div>
       </div>
     </div>
   </div>

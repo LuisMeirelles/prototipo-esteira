@@ -92,9 +92,17 @@ ok((await req('PATCH', '/api/messages/1%20OR%201=1', { cookie: alice, body: { bo
 // reações
 ok((await req('PUT', `/api/messages/${m1.json.id}/reactions`, { cookie: bob, body: { emoji: '👍' } })).status === 200, 'reação válida');
 ok((await req('PUT', `/api/messages/${m1.json.id}/reactions`, { cookie: bob, body: { emoji: '<b>x</b>' } })).status === 400, 'reação inválida recusada');
+const R = (c, emoji) => req('PUT', `/api/messages/${m1.json.id}/reactions`, { cookie: c, body: { emoji } });
+ok((await R(bob, '👍👍')).status === 400, 'dois emojis em uma reação recusados');
+ok((await R(bob, '👍❤️')).status === 400, 'emojis diferentes colados recusados');
+ok((await R(bob, '👨‍👩‍👧')).status === 200, 'emoji composto (1 grafema) aceito');
+ok((await R(bob, '🔥')).status === 200, 'terceira reação do usuário aceita');
+ok((await R(bob, '🎉')).status === 409, 'limite de reações por usuário (3)');
+ok((await R(bob, '👍')).status === 200, 'repetir reação existente não conta como nova');
+ok((await R(alice, '🎉')).status === 200, 'outro usuário não é afetado pelo limite');
 const hist = await req('GET', '/api/messages', { cookie: bob });
 const hm = hist.json.messages.find((m) => m.id === m1.json.id);
-ok(hm.reactions[0].userIds.length === 1 && hm.body === 'editado' && hm.editedAt, 'histórico reflete edição e reação');
+ok(hm.reactions.find((r) => r.emoji === '👍').userIds.length === 1 && hm.body === 'editado' && hm.editedAt, 'histórico reflete edição e reação');
 
 // menções
 const mm = await req('POST', '/api/messages', { cookie: alice, body: { body: 'oi @bob. e @Todos, mas `@alice` e @naoexiste não contam, nem email@bob.com' } });
@@ -174,7 +182,7 @@ ok(lo.status === 200 && (await req('GET', '/api/me', { cookie: bob })).status ==
 
 // estático
 const idx = await fetch(BASE + '/');
-ok(idx.status === 200 && (await idx.text()).includes('<title>Chat</title>'), 'index servido');
+ok(idx.status === 200 && (await idx.text()).includes('<title>✳ chat</title>'), 'index servido');
 ok((await fetch(BASE + '/../server/config.ts')).status === 404, 'path traversal bloqueado');
 
 w1.close(); w2.close();

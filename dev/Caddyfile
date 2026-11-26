@@ -11,7 +11,7 @@
 }
 
 http://{$HOST_IP} {
-	redir https://{$HOST_IP}{uri} permanent
+	redir https://{$HOST_IP}:{$DEV_HTTPS_PORT}{uri} permanent
 }
 
 https://{$HOST_IP} {

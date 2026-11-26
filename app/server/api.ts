@@ -39,6 +39,11 @@ declare module 'fastify' {
 
 const ID_RE = /^\d{1,12}$/;
 const MEDIA_RE = /^[A-Za-z0-9_-]{24}$/;
+// um único emoji (um grafema): sem isso a regex aceitava até 16 emojis colados em uma "reação"
+const GRAPHEMES = new Intl.Segmenter('en', { granularity: 'grapheme' });
+function isSingleEmoji(s: string): boolean {
+  return s.length <= 16 && EMOJI_RE.test(s) && [...GRAPHEMES.segment(s)].length === 1;
+}
 const EMOJI_RE = /^[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}‍️]{1,16}$/u;
 
 function cleanBody(raw: unknown): string | null {
@@ -168,12 +173,12 @@ export function registerApi(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const emoji = (req.body as { emoji?: unknown } | null)?.emoji;
     if (!ID_RE.test(id)) return bad(reply, 'not_found', 404);
-    if (typeof emoji !== 'string' || !EMOJI_RE.test(emoji)) return bad(reply, 'invalid_emoji');
+    if (typeof emoji !== 'string' || !isSingleEmoji(emoji)) return bad(reply, 'invalid_emoji');
     if (!allow(`react:${u.id}`, 60, 60_000)) return limited(reply);
 
     const m = rawMessage(Number(id));
     if (!m || m.deleted_at) return bad(reply, 'not_found', 404);
-    if (!toggleReaction(m.id, u.id, emoji, on)) return bad(reply, 'too_many_reactions');
+    if (!toggleReaction(m.id, u.id, emoji, on)) return bad(reply, 'too_many_reactions', 409);
     broadcast({ t: 'react', id: m.id, reactions: getMessageView(m.id)!.message.reactions });
     return { ok: true };
   };

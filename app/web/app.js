@@ -1,10 +1,13 @@
 import { renderMarkdown } from './md.js';
 import { norm, searchEmojis } from './emojis.js';
+import { SPINNER, startFakePanes } from './fake.js';
 
 const $ = (id) => document.getElementById(id);
-const EMOJIS = ['👍', '❤️', '😂', '🎉', '😮', '😢', '🙏', '👀', '🔥', '✅'];
 const MAX_IMG_BYTES = 6 * 1024 * 1024;
-const IMG_MAX = 360;
+const IMG_MAX = 240;
+const BASE_TITLE = '✳ chat';
+// cores de terminal para os nomes (escolhida pelo id, estável entre sessões)
+const NAME_COLORS = ['#56a8f5', '#6aab73', '#e0b95a', '#cf8e6d', '#c77dbb', '#2fbcb4', '#f2777a', '#9d8cf0'];
 
 const state = {
   me: null,
@@ -13,21 +16,21 @@ const state = {
   users: new Map(),
   messages: [],
   els: new Map(),
-  online: [],
   replyTo: null,
   pending: [],
   revealed: new Set(),
   hasMore: false,
   loadingOlder: false,
   ws: null,
+  wsOk: false,
   wsTries: 0,
   typing: new Map(),
   lastTypingSent: 0,
   unread: 0,
   unreadMention: 0,
   notif: 'all',
-  newBelow: 0,
 };
+let stopFake = null;
 
 /* ---------- utilidades ---------- */
 
@@ -56,15 +59,16 @@ async function api(method, path, body, raw) {
 }
 
 const ERRORS = {
-  rate_limited: 'Calma! Muitas ações seguidas, tente de novo em instantes.',
-  invalid_image: 'Imagem inválida ou formato não suportado (use PNG, JPG, GIF ou WebP).',
-  name_unavailable: 'Esse nome não está disponível. Use letras, números e pelo menos 2 caracteres.',
-  too_many_reactions: 'Reações demais nessa mensagem.',
-  forbidden: 'Você não pode fazer isso.',
+  rate_limited: 'calma: muitas ações seguidas, tente de novo em instantes',
+  invalid_image: 'imagem inválida ou formato não suportado (PNG, JPG, GIF ou WebP)',
+  name_unavailable: 'nome indisponível: use letras, números e pelo menos 2 caracteres',
+  forbidden: 'você não pode fazer isso',
+  too_many_reactions: 'limite de reações atingido nesta mensagem',
+  invalid_emoji: 'use um único emoji',
 };
 let toastTimer;
 function toast(err) {
-  const msg = typeof err === 'string' ? err : (err instanceof ApiError && ERRORS[err.code]) || 'Algo deu errado.';
+  const msg = typeof err === 'string' ? err : (err instanceof ApiError && ERRORS[err.code]) || 'algo deu errado';
   const t = $('toast');
   t.textContent = msg;
   t.hidden = false;
@@ -77,10 +81,8 @@ const dayFmt = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric
 const dayKey = (ts) => new Date(ts).toDateString();
 function dayLabel(ts) {
   const d = new Date(ts);
-  const today = new Date();
-  const yest = new Date(Date.now() - 86400000);
-  if (d.toDateString() === today.toDateString()) return 'Hoje';
-  if (d.toDateString() === yest.toDateString()) return 'Ontem';
+  if (d.toDateString() === new Date().toDateString()) return 'hoje';
+  if (d.toDateString() === new Date(Date.now() - 86400000).toDateString()) return 'ontem';
   return dayFmt.format(d);
 }
 
@@ -93,80 +95,28 @@ function h(tag, cls, text) {
 
 /* ---------- usuários / avatar ---------- */
 
-const userOf = (id) => state.users.get(id) ?? { id, name: 'Alguém', avatar: null };
+const userOf = (id) => state.users.get(id) ?? { id, name: 'alguém', avatar: null };
 const remember = (u) => u && state.users.set(u.id, u);
+const colorOf = (id) => NAME_COLORS[id % NAME_COLORS.length];
 
 function fillAvatar(span, user) {
   span.replaceChildren();
-  span.style.background = `hsl(${(user.id * 47) % 360} 45% 42%)`;
+  span.style.background = colorOf(user.id);
   if (user.avatar) {
     const img = new Image();
     img.alt = '';
     img.src = `/media/${user.avatar}`;
-    img.addEventListener('error', () => {
-      span.replaceChildren(document.createTextNode(user.name.slice(0, 1).toUpperCase()));
-    });
+    img.addEventListener('error', () => span.replaceChildren(document.createTextNode(user.name.slice(0, 1).toUpperCase())));
     span.append(img);
   } else {
     span.textContent = user.name.slice(0, 1).toUpperCase();
   }
 }
 function avatarEl(user, cls = '') {
-  const s = h('span', `avatar ${cls}`.trim());
+  const s = h('span', `av ${cls}`.trim());
   fillAvatar(s, user);
   return s;
 }
-
-/* ---------- tema ---------- */
-
-function applyTheme(t) {
-  if (t) document.documentElement.dataset.theme = t;
-  else delete document.documentElement.dataset.theme;
-}
-try {
-  applyTheme(localStorage.getItem('theme'));
-} catch {}
-$('theme-btn').addEventListener('click', () => {
-  const dark =
-    document.documentElement.dataset.theme === 'dark' ||
-    (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
-  const next = dark ? 'light' : 'dark';
-  applyTheme(next);
-  try {
-    localStorage.setItem('theme', next);
-  } catch {}
-});
-
-/* ---------- picker de emoji ---------- */
-
-const picker = $('picker');
-let pickerCb = null;
-function openPicker(anchor, cb) {
-  picker.replaceChildren();
-  for (const e of EMOJIS) {
-    const b = h('button', null, e);
-    b.type = 'button';
-    b.addEventListener('click', () => {
-      closePicker();
-      cb(e);
-    });
-    picker.append(b);
-  }
-  pickerCb = cb;
-  picker.hidden = false;
-  const r = anchor.getBoundingClientRect();
-  const w = picker.offsetWidth;
-  picker.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`;
-  const below = r.bottom + 8 + picker.offsetHeight < innerHeight;
-  picker.style.top = `${below ? r.bottom + 6 : r.top - picker.offsetHeight - 6}px`;
-}
-function closePicker() {
-  picker.hidden = true;
-  pickerCb = null;
-}
-document.addEventListener('mousedown', (e) => {
-  if (!picker.hidden && !picker.contains(e.target) && !e.target.closest('[data-picker-anchor]')) closePicker();
-});
 
 /* ---------- renderização de mensagens ---------- */
 
@@ -178,14 +128,14 @@ function imageEl(img) {
   b.style.maxWidth = '100%';
   b.style.aspectRatio = `${img.w} / ${img.h}`;
   const i = new Image();
-  i.alt = 'Imagem enviada';
+  i.alt = 'imagem enviada';
   i.src = `/media/${img.id}`;
   i.loading = 'lazy';
   i.draggable = false;
-  b.append(i, h('span', 'label', 'SPOILER'));
+  b.append(i, h('span', 'label', '▒ SPOILER ▒'));
   const reveal = () => b.classList.add('revealed');
   if (state.revealed.has(img.id)) reveal();
-  else b.setAttribute('aria-label', 'Imagem escondida (spoiler). Clique para revelar');
+  else b.setAttribute('aria-label', 'imagem escondida (spoiler): clique para revelar');
   b.addEventListener('click', () => {
     if (!b.classList.contains('revealed')) {
       state.revealed.add(img.id);
@@ -200,15 +150,14 @@ function imageEl(img) {
   return b;
 }
 
-function actionBtn(label, title, fn, anchor = false) {
-  const b = h('button', 'icon-btn small', label);
+function actBtn(label, title, fn) {
+  const b = h('button', 'act', label);
   b.type = 'button';
   b.title = title;
   b.setAttribute('aria-label', title);
-  if (anchor) b.dataset.pickerAnchor = '1';
   b.addEventListener('click', (e) => {
     e.stopPropagation();
-    fn(b);
+    fn();
   });
   return b;
 }
@@ -216,67 +165,51 @@ function actionBtn(label, title, fn, anchor = false) {
 function buildMsg(m, prev) {
   const wrap = h('div', 'mwrap');
   wrap.dataset.id = m.id;
-  if (!prev || dayKey(prev.createdAt) !== dayKey(m.createdAt)) wrap.append(h('div', 'day', dayLabel(m.createdAt)));
+  if (!prev || dayKey(prev.createdAt) !== dayKey(m.createdAt)) wrap.append(h('div', 'day', `── ${dayLabel(m.createdAt)} ──`));
 
   const u = userOf(m.userId);
   const first = !prev || prev.userId !== m.userId || m.createdAt - prev.createdAt > 5 * 60000 || !!m.replyTo || !!wrap.firstChild;
   const row = h('div', first ? 'msg first' : 'msg');
   if (!m.deleted && mentionsMe(m)) row.classList.add('mentioned');
-  if (first) row.append(avatarEl(u));
-  else row.append(h('span', 'gutter', timeFmt.format(m.createdAt)));
 
-  const col = h('div', 'main-col');
-  let actions = null;
   if (first) {
-    const meta = h('div', 'meta');
-    meta.append(h('span', 'name', u.name), h('span', 'time', timeFmt.format(m.createdAt)));
-    if (m.editedAt && !m.deleted) meta.append(h('span', 'edited', '(editado)'));
-    col.append(meta);
+    const head = h('div', 'mhead');
+    const name = h('span', 'name', u.name);
+    name.style.color = colorOf(u.id);
+    head.append(h('span', 'chev', '❯'), avatarEl(u), name, h('span', 'time', timeFmt.format(m.createdAt)));
+    if (m.editedAt && !m.deleted) head.append(h('span', 'edited', '(editado)'));
+    row.append(head);
   }
 
   if (m.replyTo) {
-    const ru = userOf(m.replyTo.userId);
     const ref = h('div', 'reply-ref');
-    ref.append(h('b', null, ru.name), h('span', null, m.replyTo.snippet ?? 'Mensagem apagada'));
+    ref.append(h('span', null, `↪ ${userOf(m.replyTo.userId).name}: ${m.replyTo.snippet ?? 'mensagem apagada'}`));
     ref.addEventListener('click', () => scrollToMsg(m.replyTo.id));
-    col.append(ref);
+    row.append(ref);
   }
 
   if (m.deleted) {
-    col.append(h('div', 'body deleted', 'Mensagem apagada'));
+    row.append(h('div', 'body deleted', '(mensagem apagada)'));
   } else {
     if (m.body) {
       const body = h('div', 'body');
       body.append(renderMarkdown(m.body, m.mentions, state.me.id));
-      col.append(body);
+      row.append(body);
     }
     if (m.images.length) {
       const box = h('div', 'images');
       for (const img of m.images) box.append(imageEl(img));
-      col.append(box);
+      row.append(box);
     }
-    if (m.reactions.length) {
-      const box = h('div', 'reactions');
-      for (const r of m.reactions) {
-        const mine = r.userIds.includes(state.me.id);
-        const chip = h('button', mine ? 'chip mine' : 'chip');
-        chip.type = 'button';
-        chip.title = r.userIds.map((id) => userOf(id).name).join(', ');
-        chip.append(h('span', null, r.emoji), h('span', null, String(r.userIds.length)));
-        chip.addEventListener('click', () => toggleReact(m, r.emoji, !mine));
-        box.append(chip);
-      }
-      col.append(box);
-    }
-
-    actions = h('div', 'actions');
-    actions.append(actionBtn('☺', 'Reagir', (b) => openPicker(b, (e) => toggleReact(m, e, true)), true));
-    actions.append(actionBtn('↩', 'Responder', () => setReply(m)));
-    if (m.userId === state.me.id) actions.append(actionBtn('✎', 'Editar', () => startEdit(m, wrap)));
-    if (m.userId === state.me.id || state.admin) actions.append(actionBtn('🗑', 'Apagar', () => removeMsg(m)));
+    const acts = h('div', 'acts');
+    acts.append(actBtn('↩', 'responder', () => setReply(m)));
+    if (m.userId === state.me.id) acts.append(actBtn('✎', 'editar', () => startEdit(m, wrap)));
+    if (m.userId === state.me.id || state.admin) acts.append(actBtn('✕', 'apagar', () => removeMsg(m)));
+    row.append(acts);
+    row.addEventListener('dblclick', (e) => {
+      if (!e.target.closest('button, a, textarea')) setReply(m);
+    });
   }
-  row.append(col);
-  if (actions) row.append(actions);
   wrap.append(row);
   return wrap;
 }
@@ -292,7 +225,7 @@ function rebuild(id) {
 
 const scroller = $('scroller');
 const list = $('messages');
-const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90;
+const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 60;
 const toBottom = () => {
   scroller.scrollTop = scroller.scrollHeight;
 };
@@ -308,23 +241,26 @@ function appendMessage(m) {
     toBottom();
     hideJump();
   } else {
-    state.newBelow++;
     $('jump').hidden = false;
   }
+  renderStatus();
   notifyIfNeeded(m);
 }
 
 function hideJump() {
-  state.newBelow = 0;
   $('jump').hidden = true;
 }
 $('jump').addEventListener('click', () => {
   toBottom();
   hideJump();
 });
+
+function updateTitle() {
+  document.title = state.unread ? `(${state.unreadMention ? '@' : ''}${state.unread}) ${BASE_TITLE}` : BASE_TITLE;
+}
 function clearUnread() {
   state.unread = state.unreadMention = 0;
-  document.title = 'Chat';
+  updateTitle();
 }
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) clearUnread();
@@ -333,7 +269,7 @@ window.addEventListener('focus', clearUnread);
 
 function scrollToMsg(id) {
   const el = state.els.get(id);
-  if (!el) return toast('Mensagem mais antiga, role para cima para carregar.');
+  if (!el) return toast('mensagem mais antiga: role para cima para carregar');
   el.scrollIntoView({ block: 'center', behavior: 'smooth' });
   const row = el.querySelector('.msg');
   row.classList.remove('flash');
@@ -360,6 +296,7 @@ async function loadOlder() {
     state.messages.unshift(...data.messages);
     rebuild(oldFirst.id);
     scroller.scrollTop += scroller.scrollHeight - before;
+    renderStatus();
   } catch (e) {
     toast(e);
   } finally {
@@ -368,21 +305,13 @@ async function loadOlder() {
 }
 scroller.addEventListener('scroll', () => {
   if (nearBottom()) hideJump();
-  if (scroller.scrollTop < 150) loadOlder();
+  if (scroller.scrollTop < 120) loadOlder();
 });
 
 /* ---------- ações em mensagens ---------- */
 
-async function toggleReact(m, emoji, on) {
-  try {
-    await api(on ? 'PUT' : 'DELETE', `/api/messages/${m.id}/reactions`, { emoji });
-  } catch (e) {
-    toast(e);
-  }
-}
-
 async function removeMsg(m) {
-  if (!confirm('Apagar esta mensagem?')) return;
+  if (!confirm('apagar esta mensagem?')) return;
   try {
     await api('DELETE', `/api/messages/${m.id}`);
   } catch (e) {
@@ -396,19 +325,20 @@ function startEdit(m, wrap) {
   const ta = h('textarea');
   ta.value = m.body;
   ta.maxLength = 4000;
-  const row = h('div', 'row');
-  const cancel = h('button', 'btn', 'Cancelar');
-  const save = h('button', 'btn primary', 'Salvar');
-  cancel.type = save.type = 'button';
-  row.append(h('small', null, 'Esc cancela · Enter salva'), cancel, save);
+  ta.spellcheck = false;
+  const row = h('div', 'edit-row');
+  const save = h('button', 'link', '[salvar]');
+  const cancel = h('button', 'link', '[cancelar]');
+  save.type = cancel.type = 'button';
+  row.append(h('span', 'dim', 'enter salva · esc cancela'), save, cancel);
   box.append(ta, row);
   if (body) body.replaceWith(box);
-  else wrap.querySelector('.main-col').append(box);
+  else wrap.querySelector('.msg').append(box);
   ta.focus();
   const doSave = async () => {
     try {
       await api('PATCH', `/api/messages/${m.id}`, { body: ta.value });
-      rebuild(m.id); // o evento do WebSocket também reconstrói; garante o estado normal
+      rebuild(m.id);
     } catch (e) {
       toast(e);
     }
@@ -424,14 +354,13 @@ function startEdit(m, wrap) {
   });
 }
 
-/* ---------- composer ---------- */
+/* ---------- prompt (composer) ---------- */
 
 const input = $('input');
-const sendBtn = $('send-btn');
 
 function setReply(m) {
   state.replyTo = m;
-  $('reply-text').textContent = `Respondendo a ${userOf(m.userId).name}: ${m.body.slice(0, 80) || '[imagem]'}`;
+  $('reply-text').textContent = `↪ respondendo a ${userOf(m.userId).name}: ${m.body.slice(0, 70) || '[imagem]'}`;
   $('reply-bar').hidden = false;
   input.focus();
 }
@@ -441,20 +370,15 @@ function clearReply() {
 }
 $('reply-cancel').addEventListener('click', clearReply);
 
-function updateSend() {
-  const uploading = state.pending.some((p) => p.uploading);
-  const ready = state.pending.filter((p) => p.id);
-  sendBtn.disabled = uploading || (!input.value.trim() && ready.length === 0);
-}
+const canSend = () => !state.pending.some((p) => p.uploading) && (input.value.trim() || state.pending.some((p) => p.id));
 function autosize() {
   input.style.height = 'auto';
-  input.style.height = `${Math.min(input.scrollHeight, 200)}px`;
+  input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
 }
 input.addEventListener('input', () => {
   autosize();
-  updateSend();
   updateSuggest();
-  if (Date.now() - state.lastTypingSent > 2500 && state.ws?.readyState === 1 && input.value) {
+  if (Date.now() - state.lastTypingSent > 2500 && state.ws?.readyState === 1 && input.value && !input.value.startsWith('/')) {
     state.lastTypingSent = Date.now();
     state.ws.send('{"t":"typing"}');
   }
@@ -463,6 +387,7 @@ input.addEventListener('click', updateSuggest);
 input.addEventListener('blur', closeSuggest);
 input.addEventListener('keydown', (e) => {
   if (sugg.type && !e.isComposing && suggestKey(e)) return;
+  if (e.key === 'Escape' && state.replyTo) return clearReply();
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     send();
@@ -473,46 +398,43 @@ function renderPreviews() {
   const box = $('previews');
   box.replaceChildren();
   box.hidden = state.pending.length === 0;
-  for (const p of state.pending) {
-    const d = h('div', p.uploading ? 'preview loading' : 'preview');
+  state.pending.forEach((p, i) => {
+    const d = h('span', p.uploading ? 'preview loading' : 'preview');
     const img = new Image();
     img.alt = '';
     img.src = p.url;
-    const x = h('button', null, '✕');
+    const x = h('button', 'link', '✕');
     x.type = 'button';
-    x.setAttribute('aria-label', 'Remover imagem');
+    x.setAttribute('aria-label', 'remover imagem');
     x.addEventListener('click', () => {
       URL.revokeObjectURL(p.url);
       state.pending = state.pending.filter((q) => q !== p);
       renderPreviews();
-      updateSend();
     });
-    d.append(img, x);
+    d.append(img, h('span', null, p.uploading ? `img ${i + 1} enviando…` : `img ${i + 1}`), x);
     box.append(d);
-  }
+  });
 }
 
 async function addFiles(files) {
   for (const file of files) {
     if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) {
-      toast('Apenas imagens PNG, JPG, GIF ou WebP.');
+      toast('apenas imagens PNG, JPG, GIF ou WebP');
       continue;
     }
     if (file.size > MAX_IMG_BYTES) {
-      toast('Imagem acima de 6 MB.');
+      toast('imagem acima de 6 MB');
       continue;
     }
     if (state.pending.length >= state.maxImages) {
-      toast(`No máximo ${state.maxImages} imagens por mensagem.`);
+      toast(`no máximo ${state.maxImages} imagens por mensagem`);
       break;
     }
     const p = { url: URL.createObjectURL(file), uploading: true, id: null };
     state.pending.push(p);
     renderPreviews();
-    updateSend();
     try {
-      const r = await api('POST', '/api/upload?kind=image', undefined, file);
-      p.id = r.id;
+      p.id = (await api('POST', '/api/upload?kind=image', undefined, file)).id;
     } catch (e) {
       state.pending = state.pending.filter((q) => q !== p);
       URL.revokeObjectURL(p.url);
@@ -520,10 +442,8 @@ async function addFiles(files) {
     }
     p.uploading = false;
     renderPreviews();
-    updateSend();
   }
 }
-$('attach-btn').addEventListener('click', () => $('file-input').click());
 $('file-input').addEventListener('change', (e) => {
   addFiles([...e.target.files]);
   e.target.value = '';
@@ -555,7 +475,17 @@ document.addEventListener('drop', (e) => {
 
 let sending = false;
 async function send() {
-  if (sending || sendBtn.disabled) return;
+  const cmd = /^\/([a-zà-ú]+)\s*$/i.exec(input.value);
+  if (cmd) {
+    const c = COMMANDS.find((x) => x.name === cmd[1].toLowerCase());
+    if (!c) return toast(`comando desconhecido: /${cmd[1]} (digite / para ver a lista)`);
+    if (c.run) {
+      input.value = '';
+      autosize();
+      return c.run();
+    }
+  }
+  if (sending || !canSend()) return;
   sending = true;
   try {
     await api('POST', '/api/messages', {
@@ -570,36 +500,43 @@ async function send() {
     state.pending = [];
     renderPreviews();
     clearReply();
-    updateSend();
   } catch (e) {
     toast(e);
   } finally {
     sending = false;
   }
 }
-sendBtn.addEventListener('click', send);
 
-/* ---------- presença / digitando ---------- */
-
-function renderOnline() {
-  const ul = $('online-list');
-  ul.replaceChildren();
-  const users = state.online.map(userOf).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
-  for (const u of users) {
-    const li = h('li');
-    li.append(avatarEl(u), h('span', null, u.name), h('span', 'dot'));
-    ul.append(li);
-  }
-  $('online-count').textContent = $('online-count-2').textContent = String(users.length);
-}
+/* ---------- digitando / status ---------- */
 
 function renderTyping() {
   const names = [...state.typing.keys()].map((id) => userOf(id).name);
   const t = $('typing');
-  if (names.length === 0) t.textContent = '';
-  else if (names.length === 1) t.textContent = `${names[0]} está digitando…`;
-  else if (names.length === 2) t.textContent = `${names[0]} e ${names[1]} estão digitando…`;
-  else t.textContent = 'Várias pessoas estão digitando…';
+  t.hidden = names.length === 0;
+  $('typing-text').textContent =
+    names.length === 1
+      ? ` ${names[0]} digitando…`
+      : names.length === 2
+        ? ` ${names[0]} e ${names[1]} digitando…`
+        : names.length
+          ? ' várias pessoas digitando…'
+          : '';
+}
+let spinI = 0;
+setInterval(() => {
+  if (!$('typing').hidden && !document.hidden && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    $('typing-spin').textContent = SPINNER[++spinI % SPINNER.length];
+  }
+}, 130);
+
+function renderStatus() {
+  const n = state.messages.length;
+  $('status').textContent = `▸ ${n} ${n === 1 ? 'mensagem' : 'mensagens'}${state.hasMore ? '+' : ''} · ${state.wsOk ? 'conectado' : 'reconectando…'}`;
+}
+const NOTIF_LABEL = { all: 'todas', mentions: 'só menções', off: 'off' };
+function renderFooter() {
+  $('footer').textContent = `Default · ${state.me.name} · #geral · notif: ${NOTIF_LABEL[state.notif]}`;
+  $('cwd').textContent = `~/chat/${state.me.name.toLowerCase().replace(/\s+/g, '-')}`;
 }
 
 /* ---------- WebSocket ---------- */
@@ -608,13 +545,11 @@ function applyUserUpdate(u) {
   remember(u);
   if (u.id === state.me.id) {
     state.me = u;
-    renderMe();
+    renderFooter();
   }
   for (const m of state.messages) {
     if (m.userId === u.id || m.replyTo?.userId === u.id) rebuild(m.id);
   }
-  state.online = state.online.map((x) => x);
-  renderOnline();
 }
 
 function onWsMessage(ev) {
@@ -645,30 +580,19 @@ function onWsMessage(ev) {
         Object.assign(m, { body: '', images: [], reactions: [], deleted: true });
         rebuild(m.id);
       }
-      for (const x of state.messages) if (x.replyTo?.id === e.id) {
-        x.replyTo.snippet = null;
-        rebuild(x.id);
+      for (const x of state.messages) {
+        if (x.replyTo?.id === e.id) {
+          x.replyTo.snippet = null;
+          rebuild(x.id);
+        }
       }
       if (state.replyTo?.id === e.id) clearReply();
-      break;
-    }
-    case 'react': {
-      const m = state.messages.find((x) => x.id === e.id);
-      if (m) {
-        m.reactions = e.reactions;
-        rebuild(m.id);
-      }
       break;
     }
     case 'user':
       applyUserUpdate(e.user);
       break;
-    case 'presence':
-      e.online.forEach(remember);
-      state.online = e.online.map((u) => u.id);
-      renderOnline();
-      break;
-    case 'typing': {
+    case 'typing':
       clearTimeout(state.typing.get(e.userId));
       state.typing.set(
         e.userId,
@@ -679,7 +603,7 @@ function onWsMessage(ev) {
       );
       renderTyping();
       break;
-    }
+    // 'presence' e 'react' continuam existindo no servidor, mas esta interface não os usa
   }
 }
 
@@ -688,24 +612,24 @@ function connect() {
   state.ws = ws;
   ws.addEventListener('open', async () => {
     const reconnected = state.wsTries > 0;
+    state.wsOk = true;
     state.wsTries = 0;
+    renderStatus();
     if (reconnected) await loadHistory(); // recupera o que perdeu enquanto offline
   });
   ws.addEventListener('message', onWsMessage);
   ws.addEventListener('close', (e) => {
+    state.wsOk = false;
+    renderStatus();
     if (!state.me || e.code === 4001) return;
     state.wsTries++;
     setTimeout(connect, Math.min(1000 * 2 ** state.wsTries, 15000));
   });
 }
 
-/* ---------- carga inicial ---------- */
-
 async function loadHistory() {
   const data = await api('GET', '/api/messages');
   Object.values(data.users).forEach(remember);
-  data.online.forEach(remember);
-  state.online = data.online.map((u) => u.id);
   state.hasMore = data.hasMore;
   state.messages = [];
   state.els.clear();
@@ -716,17 +640,12 @@ async function loadHistory() {
     state.els.set(m.id, el);
     list.append(el);
   }
-  renderOnline();
+  renderStatus();
   toBottom();
   hideJump();
 }
 
-function renderMe() {
-  fillAvatar($('me-avatar'), state.me);
-  $('me-name').textContent = state.me.name;
-}
-
-/* ---------- perfil ---------- */
+/* ---------- perfil e sessão ---------- */
 
 const modal = $('profile-modal');
 function openProfile() {
@@ -736,7 +655,6 @@ function openProfile() {
   modal.hidden = false;
   $('profile-name').focus();
 }
-$('me-btn').addEventListener('click', openProfile);
 $('profile-close').addEventListener('click', () => (modal.hidden = true));
 modal.addEventListener('mousedown', (e) => {
   if (e.target === modal) modal.hidden = true;
@@ -746,7 +664,7 @@ $('avatar-input').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   e.target.value = '';
   if (!file) return;
-  if (file.size > MAX_IMG_BYTES) return toast('Imagem acima de 6 MB.');
+  if (file.size > MAX_IMG_BYTES) return toast('imagem acima de 6 MB');
   try {
     const r = await api('POST', '/api/upload?kind=avatar', undefined, file);
     applyUserUpdate(r.user);
@@ -762,8 +680,9 @@ $('profile-save').addEventListener('click', async () => {
     const r = await api('PATCH', '/api/profile', { name: $('profile-name').value });
     applyUserUpdate(r.user);
     modal.hidden = true;
+    input.focus();
   } catch (e) {
-    err.textContent = (e instanceof ApiError && ERRORS[e.code]) || 'Não foi possível salvar.';
+    err.textContent = (e instanceof ApiError && ERRORS[e.code]) || 'não foi possível salvar';
     err.hidden = false;
   }
 });
@@ -771,44 +690,41 @@ $('profile-name').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') $('profile-save').click();
 });
 
-$('logout-btn').addEventListener('click', async () => {
+async function logout() {
   try {
     await api('POST', '/api/logout');
   } catch {}
   location.reload();
-});
-
-/* ---------- menu mobile / atalhos ---------- */
-
-const sidebar = $('sidebar');
-const scrim = $('scrim');
-function toggleSidebar(open) {
-  sidebar.classList.toggle('open', open);
-  scrim.hidden = !open;
 }
-$('menu-btn').addEventListener('click', () => toggleSidebar(!sidebar.classList.contains('open')));
-scrim.addEventListener('click', () => toggleSidebar(false));
+
 $('lightbox').addEventListener('click', () => ($('lightbox').hidden = true));
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  closePicker();
   $('lightbox').hidden = true;
   modal.hidden = true;
-  toggleSidebar(false);
 });
 
-/* ---------- menções (@) e emoji (/emoji) ---------- */
+/* ---------- comandos (/), menções (@) e emoji (/emoji) ---------- */
 
 const mentionsMe = (m) => m.everyone || m.mentions.some((x) => x.id === state.me.id);
 
+const COMMANDS = [
+  { name: 'emoji', desc: 'abre os emojis (ex.: /emoji coração)', run: null },
+  { name: 'img', desc: 'anexa uma imagem (ou cole / arraste)', run: () => $('file-input').click() },
+  { name: 'perfil', desc: 'nome, foto e senha', run: openProfile },
+  { name: 'notif', desc: 'notificações: todas · só menções · off', run: cycleNotif },
+  { name: 'sair', desc: 'encerra a sessão', run: logout },
+];
+
 const sugg = { type: null, start: 0, end: 0, items: [], index: 0 };
+const cmdPop = $('cmd-pop');
 const mentionPop = $('mention-pop');
 const emojiPop = $('emoji-pop');
 const EMOJI_COLS = 8;
 
 function closeSuggest() {
   sugg.type = null;
-  mentionPop.hidden = emojiPop.hidden = true;
+  cmdPop.hidden = mentionPop.hidden = emojiPop.hidden = true;
 }
 
 function updateSuggest() {
@@ -816,52 +732,72 @@ function updateSuggest() {
   if (pos !== input.selectionEnd) return closeSuggest();
   const before = input.value.slice(0, pos);
 
-  // "/emoji" ou "/emoji coração": abre o seletor com busca
+  // "/emoji" ou "/emoji coração": seletor com busca
   let m = /(^|\s)\/emoji(?:[ \t]+(\S*))?$/i.exec(before);
   if (m) {
     const items = searchEmojis(m[2] ?? '').slice(0, 160);
     Object.assign(sugg, { type: 'emoji', start: pos - (m[0].length - m[1].length), end: pos, items, index: 0 });
-    mentionPop.hidden = true;
+    cmdPop.hidden = mentionPop.hidden = true;
     return renderEmojiPop();
+  }
+
+  // "/": lista de comandos
+  m = /^\/([a-zà-ú]*)$/i.exec(before);
+  if (m) {
+    const items = COMMANDS.filter((c) => c.name.startsWith(m[1].toLowerCase()));
+    if (items.length) {
+      Object.assign(sugg, { type: 'cmd', start: 0, end: pos, items, index: 0 });
+      emojiPop.hidden = mentionPop.hidden = true;
+      return renderCmdPop();
+    }
   }
 
   // "@fu": sugere pessoas
   m = /(^|[\s(])@([a-z0-9_.-]{0,24})$/i.exec(before);
   if (m) {
     const q = norm(m[2]);
-    const people = [...state.users.values()]
+    const items = [...state.users.values()]
       .filter((u) => u.id !== state.me.id && (u.username.startsWith(q) || norm(u.name).includes(q)))
-      .slice(0, 6);
-    const items = people.map((u) => ({ username: u.username, name: u.name, user: u }));
-    if ('todos'.startsWith(q)) items.push({ username: 'todos', name: 'Todos — notifica a sala inteira', user: null });
+      .slice(0, 6)
+      .map((u) => ({ username: u.username, name: u.name, user: u }));
+    if ('todos'.startsWith(q)) items.push({ username: 'todos', name: 'todos — avisa a sala inteira', user: null });
     if (items.length) {
       Object.assign(sugg, { type: 'mention', start: pos - m[2].length - 1, end: pos, items, index: 0 });
-      emojiPop.hidden = true;
+      emojiPop.hidden = cmdPop.hidden = true;
       return renderMentionPop();
     }
   }
   closeSuggest();
 }
 
+function listRow(i, ...kids) {
+  const row = h('div', i === sugg.index ? 'item active' : 'item');
+  row.append(...kids);
+  row.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    acceptSuggest(i);
+  });
+  return row;
+}
+
+function renderCmdPop() {
+  cmdPop.replaceChildren();
+  sugg.items.forEach((c, i) => cmdPop.append(listRow(i, h('span', 'item-name', `/${c.name}`), h('span', 'item-sub', c.desc))));
+  cmdPop.hidden = false;
+}
+
 function renderMentionPop() {
   mentionPop.replaceChildren();
   sugg.items.forEach((it, i) => {
-    const row = h('div', i === sugg.index ? 'item active' : 'item');
-    row.append(it.user ? avatarEl(it.user) : h('span', 'avatar', '@'));
-    row.append(h('span', 'item-name', it.name), h('span', 'item-sub', `@${it.username}`));
-    row.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      acceptSuggest(i);
-    });
-    mentionPop.append(row);
+    mentionPop.append(listRow(i, it.user ? avatarEl(it.user) : h('span', 'av', '@'), h('span', 'item-name', it.name), h('span', 'item-sub', `@${it.username}`)));
   });
   mentionPop.hidden = false;
 }
 
 function renderEmojiPop() {
   emojiPop.replaceChildren();
-  emojiPop.append(h('div', 'pop-head', 'Emojis · digite para filtrar (ex.: /emoji coração) · setas navegam · Enter insere'));
-  if (!sugg.items.length) emojiPop.append(h('div', 'pop-empty', 'Nenhum emoji encontrado'));
+  emojiPop.append(h('div', 'pop-head', '/emoji · digite para filtrar (ex.: /emoji coração) · setas navegam · ↵ insere'));
+  if (!sugg.items.length) emojiPop.append(h('div', 'pop-empty', 'nenhum emoji encontrado'));
   sugg.items.forEach((it, i) => {
     const b = h('button', i === sugg.index ? 'active' : '', it.char);
     b.type = 'button';
@@ -879,22 +815,33 @@ function renderEmojiPop() {
 function acceptSuggest(i) {
   const it = sugg.items[i];
   if (!it) return;
-  const text = sugg.type === 'emoji' ? it.char : `@${it.username} `;
-  input.setRangeText(text, sugg.start, sugg.end, 'end');
+  const type = sugg.type;
+  if (type === 'cmd') {
+    closeSuggest();
+    if (it.run) {
+      input.value = '';
+      autosize();
+      return it.run();
+    }
+    input.setRangeText('/emoji ', 0, input.value.length, 'end'); // abre o seletor
+    input.focus();
+    return updateSuggest();
+  }
+  input.setRangeText(type === 'emoji' ? it.char : `@${it.username} `, sugg.start, sugg.end, 'end');
   closeSuggest();
   input.focus();
   autosize();
-  updateSend();
 }
 
 /** Teclado com o popup aberto. Retorna true se a tecla foi consumida. */
 function suggestKey(e) {
   const emoji = sugg.type === 'emoji';
   const n = sugg.items.length;
+  const rerender = () => (emoji ? renderEmojiPop() : sugg.type === 'cmd' ? renderCmdPop() : renderMentionPop());
   const move = (d) => {
     if (!n) return;
     sugg.index = Math.max(0, Math.min(n - 1, sugg.index + d));
-    emoji ? renderEmojiPop() : renderMentionPop();
+    rerender();
   };
   switch (e.key) {
     case 'ArrowDown': move(emoji ? EMOJI_COLS : 1); break;
@@ -913,43 +860,33 @@ function suggestKey(e) {
   return true;
 }
 
-/* ---------- notificações ---------- */
+/* ---------- notificações (/notif) ---------- */
 
 const NOTIF_MODES = ['all', 'mentions', 'off'];
-const NOTIF_LABEL = {
-  all: ['🔔', 'Notificações: todas as mensagens'],
-  mentions: ['@', 'Notificações: só quando me mencionarem'],
-  off: ['🔕', 'Notificações desligadas'],
-};
 try {
   const v = localStorage.getItem('notif');
   if (NOTIF_MODES.includes(v)) state.notif = v;
 } catch {}
 
-function renderBell() {
-  const [icon, title] = NOTIF_LABEL[state.notif];
-  const b = $('notif-btn');
-  b.textContent = icon;
-  b.title = title;
-  b.setAttribute('aria-label', title);
-}
-$('notif-btn').addEventListener('click', async () => {
-  const canNotify = 'Notification' in window;
-  if (canNotify && Notification.permission === 'default') {
-    // o navegador só aceita o pedido de permissão a partir de um clique
+async function cycleNotif() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    // o navegador só aceita o pedido de permissão a partir de uma ação do usuário
     try {
       await Notification.requestPermission();
     } catch {}
-    renderBell();
-    return toast(canNotify && Notification.permission === 'granted' ? `${NOTIF_LABEL[state.notif][1]} (ativadas)` : 'O navegador não liberou notificações do sistema. Você ainda vê o contador na aba e ouve o som.');
+    return toast(
+      Notification.permission === 'granted'
+        ? `notificações do navegador ativadas (${NOTIF_LABEL[state.notif]}). /notif troca o modo`
+        : 'o navegador não liberou notificações do sistema; você ainda vê o contador na aba e ouve o som',
+    );
   }
   state.notif = NOTIF_MODES[(NOTIF_MODES.indexOf(state.notif) + 1) % NOTIF_MODES.length];
   try {
     localStorage.setItem('notif', state.notif);
   } catch {}
-  renderBell();
-  toast(NOTIF_LABEL[state.notif][1]);
-});
+  renderFooter();
+  toast(`notificações: ${NOTIF_LABEL[state.notif]}`);
+}
 
 let audioCtx;
 function beep() {
@@ -959,24 +896,20 @@ function beep() {
     const t = audioCtx.currentTime;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
+    osc.type = 'square';
     osc.frequency.setValueAtTime(880, t);
-    osc.frequency.setValueAtTime(1175, t + 0.12);
-    gain.gain.setValueAtTime(0.07, t);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    osc.frequency.setValueAtTime(1175, t + 0.1);
+    gain.gain.setValueAtTime(0.04, t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
     osc.connect(gain).connect(audioCtx.destination);
     osc.start(t);
-    osc.stop(t + 0.36);
+    osc.stop(t + 0.31);
   } catch {}
-}
-
-function updateTitle() {
-  document.title = state.unread ? `(${state.unreadMention ? '@' : ''}${state.unread}) Chat` : 'Chat';
 }
 
 function notifyIfNeeded(m) {
   if (m.userId === state.me.id) return;
-  const away = document.hidden || !document.hasFocus();
-  if (!away) return;
+  if (!(document.hidden || !document.hasFocus())) return;
   const mine = mentionsMe(m);
   // o contador na aba sempre conta; som e notificação seguem a preferência
   state.unread++;
@@ -989,7 +922,7 @@ function notifyIfNeeded(m) {
   try {
     const u = userOf(m.userId);
     const n = new Notification(mine ? `${u.name} mencionou você` : u.name, {
-      body: m.body.replace(/\s+/g, ' ').slice(0, 140) || '📷 Imagem',
+      body: m.body.replace(/\s+/g, ' ').slice(0, 140) || '[imagem]',
       icon: u.avatar ? `/media/${u.avatar}` : undefined,
       tag: `chat-${m.id}`,
       silent: true, // o som já é o nosso
@@ -1009,7 +942,7 @@ async function loadUsers() {
   } catch {}
 }
 
-/* ---------- boot ---------- */
+/* ---------- login e boot ---------- */
 
 let authMode = 'login';
 function setAuthMode(mode) {
@@ -1019,7 +952,7 @@ function setAuthMode(mode) {
   $('tab-register').classList.toggle('active', reg);
   $('invite-row').hidden = !reg;
   $('auth-invite').required = reg;
-  $('auth-submit').textContent = reg ? 'Criar conta' : 'Entrar';
+  $('auth-submit').textContent = reg ? '↵ criar conta' : '↵ entrar';
   $('auth-pass').autocomplete = reg ? 'new-password' : 'current-password';
   $('login-error').hidden = true;
 }
@@ -1027,12 +960,12 @@ $('tab-login').addEventListener('click', () => setAuthMode('login'));
 $('tab-register').addEventListener('click', () => setAuthMode('register'));
 
 const AUTH_ERRORS = {
-  invalid_credentials: 'Usuário ou senha incorretos.',
-  invalid_invite: 'Código de convite inválido.',
-  invalid_username: 'Usuário inválido: 3 a 24 caracteres, só letras minúsculas, números, . _ -',
-  invalid_password: 'Senha inválida: use de 8 a 128 caracteres e diferente do usuário.',
-  username_taken: 'Esse usuário já existe.',
-  rate_limited: 'Muitas tentativas. Aguarde um pouco e tente de novo.',
+  invalid_credentials: 'usuário ou senha incorretos',
+  invalid_invite: 'código de convite inválido',
+  invalid_username: 'usuário inválido: 3 a 24 caracteres, só a-z, 0-9, . _ -',
+  invalid_password: 'senha inválida: de 8 a 128 caracteres e diferente do usuário',
+  username_taken: 'esse usuário já existe',
+  rate_limited: 'muitas tentativas: aguarde um pouco e tente de novo',
 };
 $('auth-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1046,7 +979,7 @@ $('auth-form').addEventListener('submit', async (e) => {
     await api('POST', authMode === 'register' ? '/auth/register' : '/auth/login', body);
     location.reload();
   } catch (ex) {
-    err.textContent = (ex instanceof ApiError && AUTH_ERRORS[ex.code]) || 'Não foi possível entrar.';
+    err.textContent = `! ${(ex instanceof ApiError && AUTH_ERRORS[ex.code]) || 'não foi possível entrar'}`;
     err.hidden = false;
     btn.disabled = false;
   }
@@ -1054,6 +987,7 @@ $('auth-form').addEventListener('submit', async (e) => {
 
 function showLogin() {
   state.me = null;
+  stopFake?.();
   $('app').hidden = true;
   $('login').hidden = false;
   $('auth-user').focus();
@@ -1065,12 +999,11 @@ $('pw-save').addEventListener('click', async () => {
   try {
     await api('POST', '/api/password', { current: $('pw-current').value, next: $('pw-next').value });
     $('pw-current').value = $('pw-next').value = '';
-    msg.style.color = 'inherit';
-    msg.textContent = 'Senha alterada. Outros dispositivos foram desconectados.';
+    msg.className = 'ok';
+    msg.textContent = 'senha alterada; os outros dispositivos foram desconectados';
   } catch (ex) {
-    msg.style.color = '';
-    msg.textContent =
-      ex.code === 'wrong_password' ? 'Senha atual incorreta.' : (AUTH_ERRORS[ex.code] ?? 'Não foi possível alterar a senha.');
+    msg.className = 'error';
+    msg.textContent = `! ${ex.code === 'wrong_password' ? 'senha atual incorreta' : (AUTH_ERRORS[ex.code] ?? 'não foi possível alterar a senha')}`;
   }
 });
 
@@ -1087,11 +1020,11 @@ async function boot() {
   remember(me.user);
   $('login').hidden = true;
   $('app').hidden = false;
-  renderMe();
-  renderBell();
+  renderFooter();
+  stopFake = startFakePanes([$('fake-0'), $('fake-1'), $('fake-2')]);
   await loadUsers();
   if ('Notification' in window && Notification.permission === 'default') {
-    toast('Clique no 🔔 (menu lateral) para ativar as notificações do navegador.');
+    toast('digite /notif para ativar as notificações do navegador');
   }
   try {
     await loadHistory();

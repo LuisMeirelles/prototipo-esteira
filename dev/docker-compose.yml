@@ -6,7 +6,8 @@ services:
       context: ../app
       dockerfile: ../dev/Dockerfile
     environment:
-      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?defina no .env}
+      # porta própria para não colidir com a produção (80/443); o Origin exige a porta
+      PUBLIC_ORIGIN: https://${HOST_IP:?defina no .env}:${DEV_HTTPS_PORT:-8443}
       INVITE_CODE: ${INVITE_CODE:?defina no .env}
       WEB_DIR: /app/web
     volumes:
@@ -20,9 +21,10 @@ services:
     depends_on: [app]
     environment:
       HOST_IP: ${HOST_IP:?defina no .env}
+      DEV_HTTPS_PORT: ${DEV_HTTPS_PORT:-8443}
     ports:
-      - "80:80"
-      - "443:443"
+      - "${DEV_HTTP_PORT:-8080}:80"
+      - "${DEV_HTTPS_PORT:-8443}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
