@@ -1,0 +1,38 @@
+name: chat-dev
+
+services:
+  app:
+    build:
+      context: ../app
+      dockerfile: ../dev/Dockerfile
+    environment:
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?defina no .env}
+      INVITE_CODE: ${INVITE_CODE:?defina no .env}
+      WEB_DIR: /app/web
+    volumes:
+      - ../app/server:/app/server:ro
+      - ../app/web:/app/web:ro
+      - chat_dev_data:/data
+    networks: [internal]
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on: [app]
+    environment:
+      HOST_IP: ${HOST_IP:?defina no .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [internal]
+
+networks:
+  internal:
+
+volumes:
+  chat_dev_data:
+  caddy_data:
+  caddy_config:

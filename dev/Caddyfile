@@ -1,0 +1,28 @@
+{
+	admin off
+	# navegadores não enviam SNI quando o acesso é por IP
+	default_sni {$HOST_IP}
+	servers {
+		timeouts {
+			read_header 10s
+			idle 2m
+		}
+	}
+}
+
+http://{$HOST_IP} {
+	redir https://{$HOST_IP}{uri} permanent
+}
+
+https://{$HOST_IP} {
+	tls internal
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	request_body {
+		max_size 8MB
+	}
+	reverse_proxy app:3000
+}
