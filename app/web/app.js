@@ -31,6 +31,7 @@ const state = {
   notif: 'all',
   poll: null,
   version: null,
+  firstUnseenId: null,
 };
 let stopFake = null;
 
@@ -175,6 +176,8 @@ function buildMsg(m, prev) {
   wrap.dataset.id = m.id;
   if (!prev || dayKey(prev.createdAt) !== dayKey(m.createdAt)) wrap.append(h('div', 'day', `── ${dayLabel(m.createdAt)} ──`));
 
+  if (m.id === state.firstUnseenId) wrap.append(h('div', 'unseen', '── novas mensagens ──'));
+
   const u = userOf(m.userId);
   const first = !prev || prev.userId !== m.userId || m.createdAt - prev.createdAt > 5 * 60000 || !!m.replyTo || !!wrap.firstChild;
   const row = h('div', first ? 'msg first' : 'msg');
@@ -266,7 +269,7 @@ $('jump').addEventListener('click', () => {
 // "Vendo o chat" = guia visível, janela com foco e chat não coberto pela camuflagem. Mensagem que chega fora
 // disso fica "não vista" e aparece em três lugares: título da guia, favicon e pílula sobre a camuflagem.
 const covered = () => camoOn && !camoEl.hidden;
-const watching = () => !document.hidden && document.hasFocus() && !covered();
+const watching = () => !document.hidden && document.hasFocus() && !covered() && !pollShown;
 
 const FAVICON = '/favicon.svg';
 const faviconEl = document.querySelector('link[rel="icon"]');
@@ -298,8 +301,31 @@ function clearUnread() {
   state.unread = state.unreadMention = 0;
   updateBadge();
 }
+// A linha "novas mensagens" fica antes da primeira não vista e permanece depois que você volta (como no Slack),
+// até você falar ou até começar outra leva de não vistas.
+function setFirstUnseen(id) {
+  const old = state.firstUnseenId;
+  state.firstUnseenId = id;
+  if (old && old !== id) rebuild(old);
+  if (id) rebuild(id);
+}
+
+// ao voltar, leva a rolagem até a linha se ela estiver fora da tela
+function revealUnseen() {
+  const line = state.els.get(state.firstUnseenId)?.querySelector('.unseen');
+  if (!line) return;
+  const r = line.getBoundingClientRect();
+  const s = scroller.getBoundingClientRect();
+  if (r.top < s.top + 4 || r.top > s.bottom - 60) line.scrollIntoView({ block: 'start' });
+}
+
 // só zera quando de fato está vendo (voltar para a guia com o mouse fora do chat não conta)
-const maybeClear = () => watching() && clearUnread();
+function maybeClear() {
+  if (!watching()) return;
+  const had = state.unread;
+  clearUnread();
+  if (had) revealUnseen();
+}
 document.addEventListener('visibilitychange', maybeClear);
 window.addEventListener('focus', maybeClear);
 
@@ -530,6 +556,7 @@ async function send() {
       images: state.pending.filter((p) => p.id).map((p) => p.id),
     });
     input.value = '';
+    setFirstUnseen(null);
     closeSuggest();
     autosize();
     state.pending.forEach((p) => URL.revokeObjectURL(p.url));
@@ -714,6 +741,7 @@ function countMissed(missed) {
   if (watching()) return;
   for (const m of missed) {
     if (m.userId === state.me.id || m.deleted) continue;
+    if (!state.unread) setFirstUnseen(m.id);
     state.unread++;
     if (mentionsMe(m)) state.unreadMention++;
   }
@@ -989,6 +1017,7 @@ function notifyIfNeeded(m) {
   if (watching()) return;
   const mine = mentionsMe(m);
   // o contador sempre conta; som e notificação seguem a preferência
+  if (!state.unread) setFirstUnseen(m.id);
   state.unread++;
   if (mine) state.unreadMention++;
   updateBadge();
@@ -1092,7 +1121,10 @@ function showView(poll) {
   $('tab-chat').classList.toggle('active', !pollShown);
   $('tab-poll').classList.toggle('active', pollShown);
   if (pollShown) renderPoll();
-  else input.focus();
+  else {
+    input.focus();
+    maybeClear();
+  }
 }
 
 async function loadPoll() {

@@ -107,6 +107,7 @@ a { color: var(--blue); }
 .messages { margin-top: auto; }
 .jump { flex: none; align-self: center; background: var(--bg2); border: 1px solid var(--line); color: var(--blue); border-radius: 6px; padding: 2px 10px; margin-bottom: 4px; cursor: pointer; font-size: 12px; }
 
+.unseen { color: var(--red); text-align: center; font-size: 11px; margin: 10px 0 2px; font-weight: 600; }
 .day { color: var(--dim); text-align: center; font-size: 11px; margin: 10px 0 2px; }
 .msg { position: relative; padding: 1px 6px 1px 8px; margin: 0 -8px; border-radius: 4px; }
 .msg.first { margin-top: 8px; }
