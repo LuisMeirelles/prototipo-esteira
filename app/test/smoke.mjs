@@ -182,7 +182,7 @@ ok(lo.status === 200 && (await req('GET', '/api/me', { cookie: bob })).status ==
 
 // estático
 const idx = await fetch(BASE + '/');
-ok(idx.status === 200 && (await idx.text()).includes('<title>✳ chat</title>'), 'index servido');
+ok(idx.status === 200 && (await idx.text()).includes('<title>protótipo esteira</title>'), 'index servido');
 ok((await fetch(BASE + '/../server/config.ts')).status === 404, 'path traversal bloqueado');
 
 w1.close(); w2.close();

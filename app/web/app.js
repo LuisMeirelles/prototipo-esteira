@@ -5,7 +5,7 @@ import { SPINNER, startFakePanes } from './fake.js';
 const $ = (id) => document.getElementById(id);
 const MAX_IMG_BYTES = 6 * 1024 * 1024;
 const IMG_MAX = 240;
-const BASE_TITLE = '✳ chat';
+const BASE_TITLE = 'protótipo esteira';
 // cores de terminal para os nomes (escolhida pelo id, estável entre sessões)
 const NAME_COLORS = ['#56a8f5', '#6aab73', '#e0b95a', '#cf8e6d', '#c77dbb', '#2fbcb4', '#f2777a', '#9d8cf0'];
 
