@@ -18,10 +18,12 @@ O modelo de ameaça é um colega da mesma rede tentando invadir. Qualquer altera
 ## Autorização
 - Operação sobre recurso de alguém valida dono (`m.user_id === u.id`) ou admin (`u.is_admin === 1`). Editar mensagem é **só do dono**, nem admin edita.
 - Mídia ainda não anexada só é visível para quem enviou; anexar mídia exige ser dono e não ter sido usada.
+- Enquete: criar exige sessão; encerrar e remover são só do criador ou admin (403 para os outros). Votar em enquete encerrada devolve 409 e remover uma aberta também (409).
 - IDs vindos de URL/corpo passam por regex (`ID_RE`, `MEDIA_RE`) antes de tocar no banco.
 
 ## Entradas
 - Texto: `cleanBody` (limite de tamanho, remove controles e caracteres bidi). Nome de exibição: `cleanName` (só letras latinas, números e pontuação simples) e único (`name_key`) para impedir se passar por outra pessoa.
+- Texto de enquete passa por `cleanLine` (uma linha, sem controles nem bidi; pergunta até 140, opção até 60, 2 a 4 opções distintas). Reação é um único grafema emoji, até 3 por usuário e 12 distintos por mensagem.
 - Imagens: magic bytes + re-encode WebP com `sharp` (remove EXIF e payload). Nunca confiar em `Content-Type`/extensão. Sem SVG. Limite de 6 MB e de pixels. Nome do arquivo gerado no servidor.
 - SQL sempre com `?`; nunca concatene valor de usuário em SQL (listas de `IN` usam placeholders gerados, ver `ph()` em `store.ts`).
 

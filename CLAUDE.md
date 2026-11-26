@@ -10,7 +10,7 @@ Node 24 + Fastify 5 + `@fastify/websocket` + SQLite (`node:sqlite`, sem ORM) · 
 
 ```
 app/server/   API, WebSocket, auth, banco (TypeScript rodado direto pelo Node)
-app/web/      index.html, app.js, md.js, emojis.js, style.css
+app/web/      index.html, app.js, md.js, emojis.js, fake.js (terminais decorativos e camuflagem), style.css
 app/test/     smoke.mjs (integração) e run.mjs (sobe servidor descartável)
 app/build.mjs build de produção (dist/server.mjs, dist/cli.mjs, dist/web/ com hash)
 dev/          compose de desenvolvimento (bind mount, node --watch)
@@ -18,7 +18,7 @@ prod/         compose de produção (build multi-stage, container endurecido, Ca
 .env          fora do git: HOST_IP, PUBLIC_ORIGIN, INVITE_CODE
 ```
 
-Mapa do servidor: `index.ts` (hooks globais: headers, CSRF, sessão, WS) · `auth.ts` (cadastro/login) · `api.ts` (rotas `/api/*` e `/media/*`) · `store.ts` (todo o SQL e a montagem de views) · `hub.ts` (WebSocket, presença) · `images.ts` · `password.ts` · `limits.ts` · `config.ts` · `cli.ts` (admin).
+Mapa do servidor: `index.ts` (hooks globais: headers, CSRF, sessão, WS) · `auth.ts` (cadastro/login) · `api.ts` (rotas `/api/*` e `/media/*`) · `store.ts` (todo o SQL e a montagem de views) · `hub.ts` (WebSocket, presença) · `version.ts` (versão do frontend, enviada no `hello`) · `images.ts` · `password.ts` · `limits.ts` · `config.ts` · `cli.ts` (admin).
 
 ## Comandos
 
@@ -31,12 +31,12 @@ Dentro de `app/`:
 | `npm run build` | Build de produção em `dist/` |
 | `npm run dev` | Servidor local com `--watch` (precisa de `INVITE_CODE` e `PUBLIC_ORIGIN` no ambiente) |
 
-Docker (sempre com `--env-file ../.env`, dentro de `prod/` ou `dev/`): `docker compose --env-file ../.env up -d --build`. Dev e prod usam as portas 80/443: rode um por vez. Skills: `/verify`, `/deploy-prod`, `/add-endpoint`, `/security-audit`, `/admin-users`.
+Docker (sempre com `--env-file ../.env`, dentro de `prod/` ou `dev/`): `docker compose --env-file ../.env up -d --build`. A produção usa 80/443 e o dev 8080/8443 (`DEV_HTTP_PORT`/`DEV_HTTPS_PORT`), então podem rodar juntos; o dev é acessado em `https://HOST_IP:8443`. Skills: `/verify`, `/deploy-prod`, `/add-endpoint`, `/security-audit`, `/admin-users`.
 
 ## Convenções
 
 - TypeScript sem enums nem parameter properties (`erasableSyntaxOnly`); imports com extensão `.ts`; `import type` para tipos.
-- Todo SQL fica em `store.ts` (ou `db.ts`), sempre parametrizado. Sem migrações: o schema é `CREATE TABLE IF NOT EXISTS`, então **mudar tabela existente exige migração explícita** (o banco de produção tem dados reais).
+- Todo SQL fica em `store.ts` (ou `db.ts`), sempre parametrizado. Sem migrações: o schema é `CREATE TABLE IF NOT EXISTS`, então **mudar tabela existente exige migração explícita** (o banco de produção tem dados reais). As migrações existentes ficam em `db.ts`, idempotentes.
 - Frontend: nunca `innerHTML` com dado de usuário; texto vai por `textContent`/`createElement`. Sem `style=` ou `<script>` inline (a CSP bloqueia); estilo dinâmico só via `el.style.prop = ...`.
 - Erros da API são códigos curtos (`{ error: 'invalid_body' }`); o frontend traduz para mensagens em `ERRORS`/`AUTH_ERRORS` em `app.js`.
 - Comentários explicam o porquê (decisão, risco), não o quê.
@@ -52,7 +52,7 @@ Detalhes em `.claude/rules/security.md`. Resumo: toda requisição que altera es
 - O app confia em `X-Forwarded-For` (`trustProxy: true`) porque só o Caddy o alcança. Nunca publique a porta 3000 do app.
 - `.env` contém segredos: não leia, imprima nem comite.
 - O healthcheck da imagem de produção consulta `GET /`. Se mudar a rota raiz, ajuste `prod/Dockerfile`.
-- Reiniciar produção derruba as conexões WebSocket (o cliente reconecta sozinho e recarrega o histórico).
+- Reiniciar produção derruba as conexões WebSocket (o cliente reconecta, recarrega o histórico e, se a versão do frontend mudou, recarrega a página sozinho ou mostra a faixa de nova versão). Páginas abertas antes de existir o `hello` precisam de Ctrl+F5 uma vez.
 - Não há gerenciamento de usuários na UI: admin é por CLI (`/admin-users`). A primeira conta criada vira admin.
 
 ## Como trabalhar aqui

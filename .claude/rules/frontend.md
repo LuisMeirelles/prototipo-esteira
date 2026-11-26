@@ -9,8 +9,10 @@ paths:
 - Sem framework e sem dependências no navegador. Módulos ES nativos (`app.js` importa `md.js` e `emojis.js`); em produção o esbuild junta e minifica. Não use APIs que exijam bundler (imports de `node_modules`, JSX, TypeScript).
 - Construa DOM com os helpers `h(tag, classe, texto)` e `$(id)` de `app.js`. **Nunca** `innerHTML` com dado de usuário (nome, mensagem, snippet de resposta, nome de arquivo). Veja `.claude/rules/security.md`.
 - CSP bloqueia estilo e script inline: nada de `style="..."` no HTML nem `onclick=`. Estilo dinâmico só por `el.style.prop = valor`. Novo `id` usado em `app.js` precisa existir em `index.html` (um `$()` nulo no topo do módulo derruba a página inteira em branco).
-- Cores e espaçamento via variáveis CSS de `style.css` (`--bg`, `--surface`, `--accent`...), com suporte a tema claro/escuro (`prefers-color-scheme` e `data-theme`). Não hardcode cor de tema.
-- Visual: inspirado no chat do Claude/Codex. Coluna central de ~780px, paleta quente, bordas suaves, tipografia do sistema. Mantenha responsivo (`@media (max-width: 760px)`) e acessível: `button` para ação clicável, `aria-label` em botões só de ícone, foco visível.
+- Cores via variáveis CSS de `style.css` (`--bg`, `--bg2`, `--line`, `--orange`, `--red`...). O tema é um só, escuro, no estilo de terminal de agente de código. Não hardcode cor fora dessas variáveis.
+- Layout: grade 2×2. O chat é o único painel real; os outros três são terminais decorativos (`fake.js`), só no navegador e sem requisições. Abaixo de 760px aparece só o chat. Mantenha acessível: `button` para ação clicável, `aria-label` em botões só de ícone, foco visível.
+- Camuflagem: a sessão fake que cobre o chat (`#camo`) é mostrada e escondida sempre por `cover()`. Contador de não vistas, favicon, pílula e linha `novas mensagens` dependem de `watching()`: ao mexer neles, preserve que só zera quando o chat está de fato à vista.
+- Aviso de deploy: `hello` guarda a versão da página e `onServerVersion` recarrega (ou mostra a faixa) quando muda depois de reconectar.
 - Imagens enviadas são **sempre spoiler** (borradas até o clique); depois de revelada, o clique abre o lightbox. Não mostre imagem de mensagem sem esse envoltório.
 - Mensagens: o servidor é a fonte da verdade. Ações (enviar, editar, reagir, apagar) chamam a API e a UI atualiza pelos eventos do WebSocket, sem atualização otimista que possa divergir.
 - Texto da interface em português do Brasil. Mensagens de erro mapeadas por código em `ERRORS`/`AUTH_ERRORS`.

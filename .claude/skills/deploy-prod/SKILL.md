@@ -21,14 +21,14 @@ Reiniciar derruba as conexões WebSocket de quem está online (os clientes recon
    docker compose --env-file ../.env exec -T app node -e "fetch('http://127.0.0.1:3000/').then(r=>console.log(r.status))"
    ```
    O `app` deve aparecer `(healthy)` e responder 200. Procure erros nos logs (`"level":50`).
-4. Relate o resultado. Lembre o usuário de dar Ctrl+F5 no navegador para pegar o JS novo.
+4. Relate o resultado. Se o frontend mudou, as páginas abertas recarregam sozinhas (aviso de versão pelo WebSocket); quem tiver rascunho vê a faixa "nova versão disponível". Ctrl+F5 só é preciso para quem estava com uma página anterior ao `hello`.
 
 ## Se algo der errado
 
 - **Tela em branco no navegador, mas o app saudável:** `HOST_IP`/`PUBLIC_ORIGIN` do `.env` diferem do IP usado no navegador. O Caddy responde 200 vazio. Peça ao usuário para corrigir o `.env` e subir de novo.
 - **`app` reiniciando:** veja `logs app`. Causa comum: variável obrigatória ausente (`INVITE_CODE`, `PUBLIC_ORIGIN`).
 - **`unhealthy`:** o healthcheck consulta `GET /` dentro do container; veja o `HEALTHCHECK` em `prod/Dockerfile`.
-- **Porta 80/443 ocupada:** o ambiente `dev/` provavelmente está no ar. Derrube-o (`docker compose down` em `dev/`, sem `-v`).
+- **Porta 80/443 ocupada:** outro serviço está nela (o `dev/` usa 8080/8443 e não colide). Veja quem com `ss -ltnp | grep -E ':(80|443)\b'` e peça ao usuário antes de parar qualquer coisa.
 
 ## Nunca
 
