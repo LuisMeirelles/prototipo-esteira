@@ -10,6 +10,12 @@ import { hashPassword, verifyPassword } from './password.ts';
 import {
   addMedia,
   createMessage,
+  closePoll,
+  createPoll,
+  deletePoll,
+  getPoll,
+  rawPoll,
+  votePoll,
   deleteMessage,
   deleteSession,
   deleteUserSessions,
@@ -55,6 +61,18 @@ function cleanBody(raw: unknown): string | null {
     .trim();
   return s.length <= config.maxMessageLen ? s : null;
 }
+
+// texto de uma linha (pergunta/opção da enquete): sem quebras, controles nem caracteres bidi
+function cleanLine(raw: unknown, max: number): string | null {
+  if (typeof raw !== 'string' || raw.length > max * 2) return null;
+  const s = raw
+    .replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ')
+    .replace(/ +/g, ' ')
+    .trim();
+  return s.length >= 1 && s.length <= max ? s : null;
+}
+const POLL_QUESTION_MAX = 140;
+const POLL_OPTION_MAX = 60;
 
 const isAdmin = (u: UserRow) => u.is_admin === 1;
 
@@ -182,6 +200,79 @@ export function registerApi(app: FastifyInstance) {
     broadcast({ t: 'react', id: m.id, reactions: getMessageView(m.id)!.message.reactions });
     return { ok: true };
   };
+  /* ---------- enquete ---------- */
+
+  app.get('/api/poll', async (req, reply) => {
+    if (!me(req, reply)) return;
+    return { poll: getPoll() };
+  });
+
+  app.post('/api/poll', async (req, reply) => {
+    const u = me(req, reply);
+    if (!u) return;
+    if (!allow(`poll:${u.id}`, 3, 10 * 60_000)) return limited(reply);
+    const b = (req.body ?? {}) as { question?: unknown; options?: unknown };
+    const question = cleanLine(b.question, POLL_QUESTION_MAX);
+    if (!question) return bad(reply, 'invalid_poll');
+    if (!Array.isArray(b.options) || b.options.length < 2 || b.options.length > 4) return bad(reply, 'invalid_poll');
+    const options = b.options.map((o) => cleanLine(o, POLL_OPTION_MAX));
+    if (options.some((o) => o === null)) return bad(reply, 'invalid_poll');
+    const labels = options as string[];
+    if (new Set(labels.map((o) => o.toLowerCase())).size !== labels.length) return bad(reply, 'invalid_poll');
+    const poll = createPoll(u.id, question, labels);
+    if (!poll) return bad(reply, 'poll_exists', 409);
+    broadcast({ t: 'poll', poll });
+    return { ok: true };
+  });
+
+  app.put('/api/poll/:id/vote', async (req, reply) => {
+    const u = me(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const option = (req.body as { option?: unknown } | null)?.option;
+    if (!ID_RE.test(id)) return bad(reply, 'not_found', 404);
+    if (typeof option !== 'number' || !Number.isInteger(option)) return bad(reply, 'invalid_option');
+    if (!allow(`pollvote:${u.id}`, 30, 60_000)) return limited(reply);
+    const p = rawPoll(Number(id));
+    if (!p) return bad(reply, 'not_found', 404);
+    if (p.closed_at) return bad(reply, 'poll_closed', 409);
+    if (option < 0 || option >= p.options) return bad(reply, 'invalid_option');
+    votePoll(p.id, u.id, option);
+    broadcast({ t: 'poll', poll: getPoll() });
+    return { ok: true };
+  });
+
+  // só quem criou ou admin encerra (o resultado fica visível para todos) ou remove a enquete
+  const pollOwned = (req: FastifyRequest, reply: FastifyReply, limitKey: string) => {
+    const u = me(req, reply);
+    if (!u) return null;
+    const { id } = req.params as { id: string };
+    if (!ID_RE.test(id)) return void bad(reply, 'not_found', 404);
+    if (!allow(`${limitKey}:${u.id}`, 10, 60_000)) return void limited(reply);
+    const p = rawPoll(Number(id));
+    if (!p) return void bad(reply, 'not_found', 404);
+    if (p.user_id !== u.id && !isAdmin(u)) return void bad(reply, 'forbidden', 403);
+    return p;
+  };
+
+  app.post('/api/poll/:id/close', async (req, reply) => {
+    const p = pollOwned(req, reply, 'pollclose');
+    if (!p) return;
+    if (!closePoll(p.id)) return bad(reply, 'poll_closed', 409);
+    broadcast({ t: 'poll', poll: getPoll() });
+    return { ok: true };
+  });
+
+  app.delete('/api/poll/:id', async (req, reply) => {
+    const p = pollOwned(req, reply, 'pollremove');
+    if (!p) return;
+    // remover só depois de encerrar: apagar uma enquete aberta descartaria os votos sem ninguém ver o resultado
+    if (!p.closed_at) return bad(reply, 'poll_open', 409);
+    deletePoll(p.id);
+    broadcast({ t: 'poll', poll: null });
+    return { ok: true };
+  });
+
   app.put('/api/messages/:id/reactions', react(true));
   app.delete('/api/messages/:id/reactions', react(false));
 

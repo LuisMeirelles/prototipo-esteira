@@ -43,8 +43,9 @@
     <section class="pane chat" id="chat-pane">
       <div class="tabs">
         <span class="tab dim">Terminal</span>
-        <span class="tab active"><span class="star">✳</span><span class="title">chat · geral</span><span class="x">×</span></span>
+        <span class="tab active" id="tab-chat" role="tab" tabindex="0"><span class="star">✳</span><span class="title">chat · geral</span><span class="x">×</span></span>
         <span class="tab">Local</span>
+        <span class="tab" id="tab-poll" role="tab" tabindex="0" hidden><span class="star">✳</span><span class="title" id="tab-poll-title">enquete</span></span>
         <span class="plus">＋</span>
       </div>
 
@@ -52,6 +53,7 @@
         <div id="messages" class="messages" aria-live="polite"></div>
       </div>
       <button id="jump" class="jump" type="button" hidden>↓ novas mensagens</button>
+      <div id="poll-view" class="poll-view" hidden></div>
 
       <div class="dock">
         <div id="typing" class="think" hidden aria-live="polite"><span id="typing-spin" class="spin">✻</span><span id="typing-text" class="verb"></span></div>
@@ -76,7 +78,7 @@
           </div>
         </div>
         <input id="file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
-        <div class="hint">↵ envia · ⇧↵ nova linha · <b>/emoji</b> emojis · <b>/img</b> imagem · <b>/perfil</b> · <b>/notif</b> · <b>/sair</b> · <b>@nome</b> menciona · duplo clique responde</div>
+        <div class="hint">↵ envia · ⇧↵ nova linha · <b>/emoji</b> emojis · <b>/img</b> imagem · <b>/enquete</b> · <b>/perfil</b> · <b>/notif</b> · <b>/sair</b> · <b>@nome</b> menciona · duplo clique responde</div>
       </div>
     </section>
 
@@ -107,6 +109,29 @@
         <div class="modal-actions">
           <button id="profile-close" class="link" type="button">[fechar]</button>
           <button id="profile-save" class="btn" type="button">↵ salvar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="poll-modal" class="modal" hidden>
+    <div class="modal-card pane" role="dialog" aria-modal="true" aria-label="Nova enquete">
+      <div class="tabs"><span class="tab active"><span class="star">✳</span><span class="title">nova enquete</span></span></div>
+      <div class="modal-body">
+        <label for="poll-q">pergunta ›</label>
+        <input id="poll-q" maxlength="140" autocomplete="off" spellcheck="false">
+        <label for="poll-o0">opção 1 ›</label>
+        <input id="poll-o0" class="poll-opt" maxlength="60" autocomplete="off" spellcheck="false">
+        <label for="poll-o1">opção 2 ›</label>
+        <input id="poll-o1" class="poll-opt" maxlength="60" autocomplete="off" spellcheck="false">
+        <label for="poll-o2">opção 3 (opcional) ›</label>
+        <input id="poll-o2" class="poll-opt" maxlength="60" autocomplete="off" spellcheck="false">
+        <label for="poll-o3">opção 4 (opcional) ›</label>
+        <input id="poll-o3" class="poll-opt" maxlength="60" autocomplete="off" spellcheck="false">
+        <p id="poll-error" class="error" hidden></p>
+        <div class="modal-actions">
+          <button id="poll-cancel" class="link" type="button">[cancelar]</button>
+          <button id="poll-create" class="btn" type="button">↵ criar</button>
         </div>
       </div>
     </div>

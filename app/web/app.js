@@ -29,6 +29,7 @@ const state = {
   unread: 0,
   unreadMention: 0,
   notif: 'all',
+  poll: null,
 };
 let stopFake = null;
 
@@ -63,6 +64,12 @@ const ERRORS = {
   invalid_image: 'imagem inválida ou formato não suportado (PNG, JPG, GIF ou WebP)',
   name_unavailable: 'nome indisponível: use letras, números e pelo menos 2 caracteres',
   forbidden: 'você não pode fazer isso',
+  poll_exists: 'já existe uma enquete ativa: abra a aba ou peça para encerrá-la',
+  invalid_poll: 'use uma pergunta (até 140) e de 2 a 4 opções diferentes (até 60 caracteres)',
+  invalid_option: 'opção inválida',
+  not_found: 'a enquete não existe mais',
+  poll_closed: 'a enquete já foi encerrada',
+  poll_open: 'encerre a enquete antes de removê-la',
   too_many_reactions: 'limite de reações atingido nesta mensagem',
   invalid_emoji: 'use um único emoji',
 };
@@ -592,6 +599,9 @@ function onWsMessage(ev) {
     case 'user':
       applyUserUpdate(e.user);
       break;
+    case 'poll':
+      setPoll(e.poll);
+      break;
     case 'typing':
       clearTimeout(state.typing.get(e.userId));
       state.typing.set(
@@ -615,7 +625,10 @@ function connect() {
     state.wsOk = true;
     state.wsTries = 0;
     renderStatus();
-    if (reconnected) await loadHistory(); // recupera o que perdeu enquanto offline
+    if (reconnected) {
+      await loadHistory(); // recupera o que perdeu enquanto offline
+      await loadPoll();
+    }
   });
   ws.addEventListener('message', onWsMessage);
   ws.addEventListener('close', (e) => {
@@ -711,6 +724,7 @@ const mentionsMe = (m) => m.everyone || m.mentions.some((x) => x.id === state.me
 const COMMANDS = [
   { name: 'emoji', desc: 'abre os emojis (ex.: /emoji coração)', run: null },
   { name: 'img', desc: 'anexa uma imagem (ou cole / arraste)', run: () => $('file-input').click() },
+  { name: 'enquete', desc: 'cria uma enquete (ou abre a ativa)', run: openPollCreate },
   { name: 'perfil', desc: 'nome, foto e senha', run: openProfile },
   { name: 'notif', desc: 'notificações: todas · só menções · off', run: cycleNotif },
   { name: 'sair', desc: 'encerra a sessão', run: logout },
@@ -942,6 +956,186 @@ async function loadUsers() {
   } catch {}
 }
 
+/* ---------- enquete ---------- */
+
+const chatPane = $('chat-pane');
+const pollView = $('poll-view');
+const pollModal = $('poll-modal');
+let pollShown = false;
+
+function showView(poll) {
+  pollShown = poll && !!state.poll;
+  chatPane.classList.toggle('show-poll', pollShown);
+  pollView.hidden = !pollShown;
+  $('tab-chat').classList.toggle('active', !pollShown);
+  $('tab-poll').classList.toggle('active', pollShown);
+  if (pollShown) renderPoll();
+  else input.focus();
+}
+
+async function loadPoll() {
+  try {
+    setPoll((await api('GET', '/api/poll')).poll);
+  } catch {}
+}
+
+function setPoll(p) {
+  const had = state.poll;
+  state.poll = p;
+  $('tab-poll').hidden = !p;
+  if (had && !p) {
+    if (pollShown) toast('a enquete foi removida');
+    showView(false);
+  }
+  // encerrada por alguém (criador ou admin): abre o resultado para todos
+  const justClosed = p && p.closedAt && had && had.id === p.id && !had.closedAt;
+  if (p) {
+    // quem votou mas ainda não está no cache (conta nova) aparece como "alguém" até recarregar
+    const ids = p.options.flatMap((o) => o.userIds).concat(p.userId);
+    if (ids.some((id) => !state.users.has(id))) loadUsers().then(renderPoll);
+    renderPoll();
+    if (justClosed) {
+      toast('enquete encerrada: veja o resultado');
+      showView(true);
+    }
+  }
+}
+
+function renderPoll() {
+  const p = state.poll;
+  if (!p) return;
+  const mine = p.options.findIndex((o) => o.userIds.includes(state.me.id));
+  const title = $('tab-poll-title');
+  const closed = !!p.closedAt;
+  title.textContent = closed ? 'resultado' : 'enquete';
+  $('tab-poll').querySelector('.dot')?.remove();
+  if (!closed && mine < 0) $('tab-poll').append(h('span', 'dot', '●')); // ainda não votou
+  if (!pollShown) return;
+
+  const total = p.options.reduce((n, o) => n + o.userIds.length, 0);
+  const box = h('div');
+  const top = Math.max(0, ...p.options.map((o) => o.userIds.length));
+  const winners = closed && top > 0 ? p.options.filter((o) => o.userIds.length === top) : [];
+  box.append(h('span', 'poll-chip' + (closed ? ' done' : ''), closed ? 'Resultado' : 'Enquete'));
+  box.append(h('div', 'poll-q', p.question));
+  box.append(h('div', 'poll-meta', `por ${userOf(p.userId).name} · ${total} ${total === 1 ? 'voto' : 'votos'}${closed ? ' · encerrada' : ''}`));
+  if (closed) {
+    const msg = !winners.length ? 'ninguém votou' : winners.length > 1 ? `empate: ${winners.map((o) => o.label).join(' · ')}` : `venceu: ${winners[0].label}`;
+    box.append(h('div', 'poll-verdict', msg));
+  }
+
+  const opts = h('div', 'poll-opts');
+  opts.setAttribute('role', 'radiogroup');
+  p.options.forEach((o, i) => {
+    const isWin = winners.includes(o);
+    const row = h('button', 'poll-opt-row' + (i === mine ? ' mine' : '') + (isWin ? ' win' : ''));
+    row.type = 'button';
+    row.disabled = closed;
+    row.setAttribute('role', 'radio');
+    row.setAttribute('aria-checked', String(i === mine));
+    const line = h('span', 'poll-line');
+    line.append(h('span', 'poll-cur', isWin ? '✔' : i === mine ? '❯' : ''), h('span', 'poll-num', `${i + 1}.`), h('span', 'poll-label', o.label), h('span', 'poll-count', closed && total ? `${o.userIds.length} · ${Math.round((o.userIds.length / total) * 100)}%` : String(o.userIds.length)));
+    const bar = h('div', 'poll-bar');
+    const fill = h('i');
+    fill.style.width = `${total ? Math.round((o.userIds.length / total) * 100) : 0}%`;
+    bar.append(fill);
+    row.append(line, bar);
+    if (o.userIds.length) row.append(h('div', 'poll-voters', o.userIds.map((id) => userOf(id).name).join(', ')));
+    if (!closed) row.addEventListener('click', () => vote(i));
+    opts.append(row);
+  });
+  box.append(opts);
+
+  const foot = h('div', 'poll-foot');
+  foot.append(h('span', null, closed ? 'votação encerrada' : `1–${p.options.length} ou clique para votar · pode trocar o voto`));
+  if (p.userId === state.me.id || state.admin) {
+    const act = h('button', 'link', closed ? '[remover]' : '[encerrar e mostrar resultado]');
+    act.type = 'button';
+    act.addEventListener('click', closed ? removePoll : closePoll);
+    foot.append(act);
+  }
+  box.append(foot);
+  pollView.replaceChildren(box);
+}
+
+async function vote(i) {
+  if (!state.poll) return;
+  try {
+    await api('PUT', `/api/poll/${state.poll.id}/vote`, { option: i });
+  } catch (e) {
+    toast(e);
+    if (e.status === 404) loadPoll();
+  }
+}
+
+async function closePoll() {
+  if (!state.poll || !confirm('Encerrar a enquete? O resultado aparece para todos e ninguém mais vota.')) return;
+  try {
+    await api('POST', `/api/poll/${state.poll.id}/close`);
+  } catch (e) {
+    toast(e);
+  }
+}
+
+async function removePoll() {
+  if (!state.poll) return;
+  try {
+    await api('DELETE', `/api/poll/${state.poll.id}`);
+  } catch (e) {
+    toast(e);
+  }
+}
+
+for (const id of ['tab-chat', 'tab-poll']) {
+  const tab = $(id);
+  const go = () => showView(id === 'tab-poll');
+  tab.addEventListener('click', go);
+  tab.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      go();
+    }
+  });
+}
+document.addEventListener('keydown', (e) => {
+  if (!pollShown || !state.poll || state.poll.closedAt || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (!pollModal.hidden || !modal.hidden || e.target.matches('input, textarea')) return;
+  const n = Number(e.key);
+  if (Number.isInteger(n) && n >= 1 && n <= state.poll.options.length) vote(n - 1);
+});
+
+function openPollCreate() {
+  if (state.poll && !state.poll.closedAt) {
+    toast(ERRORS.poll_exists);
+    return showView(true);
+  }
+  for (const el of pollModal.querySelectorAll('input')) el.value = '';
+  $('poll-error').hidden = true;
+  pollModal.hidden = false;
+  $('poll-q').focus();
+}
+$('poll-cancel').addEventListener('click', () => ((pollModal.hidden = true), input.focus()));
+pollModal.addEventListener('mousedown', (e) => {
+  if (e.target === pollModal) pollModal.hidden = true;
+});
+pollModal.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('poll-create').click();
+  if (e.key === 'Escape') pollModal.hidden = true;
+});
+$('poll-create').addEventListener('click', async () => {
+  const err = $('poll-error');
+  err.hidden = true;
+  const options = [...pollModal.querySelectorAll('.poll-opt')].map((el) => el.value.trim()).filter(Boolean);
+  try {
+    await api('POST', '/api/poll', { question: $('poll-q').value, options });
+    pollModal.hidden = true;
+    showView(true);
+  } catch (e) {
+    err.textContent = (e instanceof ApiError && ERRORS[e.code]) || 'não foi possível criar a enquete';
+    err.hidden = false;
+  }
+});
+
 /* ---------- login e boot ---------- */
 
 let authMode = 'login';
@@ -1031,6 +1225,7 @@ async function boot() {
   } catch (e) {
     toast(e);
   }
+  await loadPoll();
   connect();
   input.focus();
 }

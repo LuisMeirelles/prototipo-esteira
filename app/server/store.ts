@@ -395,3 +395,74 @@ export function toggleReaction(messageId: number, userId: number, emoji: string,
   }
   return true;
 }
+
+/* ---------- enquete (no máximo uma ativa; encerrar = apagar) ---------- */
+
+export interface PollView {
+  id: number;
+  userId: number;
+  question: string;
+  options: { label: string; userIds: number[] }[];
+  createdAt: number;
+  /** preenchido quando encerrada: a enquete fica só como resultado, sem aceitar votos */
+  closedAt: number | null;
+}
+
+export function getPoll(): PollView | null {
+  const p = db.prepare('SELECT id, user_id, question, created_at, closed_at FROM polls ORDER BY id DESC LIMIT 1').get() as
+    | { id: number; user_id: number; question: string; created_at: number; closed_at: number | null }
+    | undefined;
+  if (!p) return null;
+  const opts = db.prepare('SELECT idx, label FROM poll_options WHERE poll_id = ? ORDER BY idx').all(p.id) as {
+    idx: number;
+    label: string;
+  }[];
+  const votes = db.prepare('SELECT user_id, option_idx FROM poll_votes WHERE poll_id = ? ORDER BY rowid').all(p.id) as {
+    user_id: number;
+    option_idx: number;
+  }[];
+  return {
+    id: p.id,
+    userId: p.user_id,
+    question: p.question,
+    createdAt: p.created_at,
+    closedAt: p.closed_at,
+    options: opts.map((o) => ({ label: o.label, userIds: votes.filter((v) => v.option_idx === o.idx).map((v) => v.user_id) })),
+  };
+}
+
+/** null se já existe uma enquete aberta (a checagem e o insert ficam na mesma transação). Uma já encerrada é substituída. */
+export function createPoll(userId: number, question: string, options: string[]): PollView | null {
+  return tx(() => {
+    if (db.prepare('SELECT 1 FROM polls WHERE closed_at IS NULL LIMIT 1').get()) return null;
+    db.exec('DELETE FROM polls');
+    const id = Number(
+      db.prepare('INSERT INTO polls (user_id, question, created_at) VALUES (?,?,?)').run(userId, question, Date.now())
+        .lastInsertRowid,
+    );
+    const ins = db.prepare('INSERT INTO poll_options (poll_id, idx, label) VALUES (?,?,?)');
+    options.forEach((label, i) => ins.run(id, i, label));
+    return getPoll();
+  });
+}
+
+export function rawPoll(id: number): { id: number; user_id: number; closed_at: number | null; options: number } | undefined {
+  return db
+    .prepare('SELECT p.id, p.user_id, p.closed_at, (SELECT COUNT(*) FROM poll_options o WHERE o.poll_id = p.id) AS options FROM polls p WHERE p.id = ?')
+    .get(id) as unknown as { id: number; user_id: number; closed_at: number | null; options: number } | undefined;
+}
+
+export function votePoll(pollId: number, userId: number, optionIdx: number) {
+  db.prepare(
+    'INSERT INTO poll_votes (poll_id, user_id, option_idx) VALUES (?,?,?) ON CONFLICT (poll_id, user_id) DO UPDATE SET option_idx = excluded.option_idx',
+  ).run(pollId, userId, optionIdx);
+}
+
+/** false se já estava encerrada (o UPDATE condicional evita encerrar duas vezes em corrida). */
+export function closePoll(id: number): boolean {
+  return Number(db.prepare('UPDATE polls SET closed_at = ? WHERE id = ? AND closed_at IS NULL').run(Date.now(), id).changes) > 0;
+}
+
+export function deletePoll(id: number) {
+  db.prepare('DELETE FROM polls WHERE id = ?').run(id);
+}

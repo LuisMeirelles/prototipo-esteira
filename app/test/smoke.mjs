@@ -176,6 +176,57 @@ ok((await req('GET', '/api/me', { cookie: bob2 })).status === 401, 'troca de sen
 ok((await req('GET', '/api/me', { cookie: bob })).status === 200, 'sessão atual continua');
 ok((await req('POST', '/auth/login', { body: { username: 'bob', password: 'nova-senha-22' } })).status === 200, 'login com a nova senha');
 
+// enquete
+ok((await req('GET', '/api/poll')).status === 401, 'enquete sem sessão => 401');
+ok((await req('POST', '/api/poll', { body: { question: 'x', options: ['a', 'b'] } })).status === 401, 'criar enquete sem sessão => 401');
+ok((await req('POST', '/api/poll', { cookie: alice, body: { question: 'x', options: ['a', 'b'] }, origin: 'https://evil.com' })).status === 403, 'criar enquete com Origin errada => 403');
+const pq = { cookie: alice };
+ok((await req('POST', '/api/poll', { ...pq, body: { question: 'x', options: ['a'] } })).status === 400, 'enquete com 1 opção recusada');
+ok((await req('POST', '/api/poll', { ...pq, body: { question: 'x', options: ['A', 'a'] } })).status === 400, 'opções repetidas recusadas');
+const wsPoll = await wsOpen(bob, ORIGIN);
+const pc = await req('POST', '/api/poll', { ...pq, body: { question: 'Almoço\n\u202ehoje?', options: ['Pizza', 'Sushi', 'Salada'] } });
+ok(pc.status === 200, 'enquete criada');
+ok((await req('POST', '/api/poll', { cookie: bob, body: { question: 'outra', options: ['a', 'b'] } })).status === 409, 'segunda enquete ativa => 409');
+ok((await req('POST', '/api/poll', { ...pq, body: { question: 'y', options: ['a', 'b'] } })).status === 429, 'rate limit de criação de enquete');
+await sleep(150);
+ok(wsPoll.events.some((e) => e.t === 'poll' && e.poll?.options.length === 3), 'ws avisa a nova enquete');
+wsPoll.close();
+const gp = (await req('GET', '/api/poll', { cookie: bob })).json.poll;
+ok(gp.question === 'Almoço hoje?' && gp.options.length === 3, 'pergunta saneada (quebra e bidi removidos)');
+const V = (c, option, id = gp.id) => req('PUT', `/api/poll/${id}/vote`, { cookie: c, body: { option } });
+ok((await V(bob, 1)).status === 200, 'voto válido');
+ok((await V(bob, 3)).status === 400 && (await V(bob, -1)).status === 400 && (await V(bob, '1')).status === 400 && (await V(bob, 1.5)).status === 400, 'opção inválida recusada');
+ok((await V(bob, 0, 999999)).status === 404, 'voto em enquete inexistente => 404');
+ok((await req('PUT', `/api/poll/${gp.id}/vote`, { cookie: bob, body: { option: 0 }, origin: 'https://evil.com' })).status === 403, 'voto com Origin errada => 403');
+ok((await V(bob, 0)).status === 200, 'voto pode ser trocado');
+await V(alice, 0);
+const vp = (await req('GET', '/api/poll', { cookie: bob })).json.poll;
+ok(vp.options[0].userIds.length === 2 && vp.options[1].userIds.length === 0, 'um voto por usuário (troca move o voto)');
+const CL = (c, id = gp.id, o = {}) => req('POST', `/api/poll/${id}/close`, { cookie: c, ...o });
+ok((await CL(null)).status === 401, 'encerrar sem sessão => 401');
+ok((await CL(bob)).status === 403, 'não-dono não encerra enquete');
+ok((await CL(alice, gp.id, { origin: null })).status === 403, 'encerrar sem Origin => 403');
+ok((await CL(alice, gp.id, { origin: 'https://evil.com' })).status === 403, 'encerrar com Origin errada => 403');
+ok((await CL(alice, '1%20OR%201=1')).status === 404, 'id inválido ao encerrar => 404');
+ok((await CL(alice, 999999)).status === 404, 'encerrar enquete inexistente => 404');
+ok((await req('DELETE', `/api/poll/${gp.id}`, { cookie: alice })).status === 409, 'não remove enquete aberta (votos seriam perdidos)');
+ok((await CL(alice)).status === 200, 'dono encerra a enquete');
+const cp = (await req('GET', '/api/poll', { cookie: bob })).json.poll;
+ok(cp && cp.closedAt && cp.options[0].userIds.length === 2, 'resultado continua disponível depois de encerrar');
+ok((await V(bob, 1)).status === 409, 'voto em enquete encerrada => 409');
+ok((await CL(alice)).status === 409, 'encerrar de novo => 409');
+ok((await req('DELETE', `/api/poll/${gp.id}`, { cookie: bob })).status === 403, 'não-dono não remove enquete');
+ok((await req('DELETE', `/api/poll/${gp.id}`, { cookie: alice })).status === 200, 'dono remove a enquete encerrada');
+ok((await req('GET', '/api/poll', { cookie: bob })).json.poll === null, 'sem enquete depois de remover');
+ok((await V(bob, 0)).status === 404, 'voto em enquete removida => 404');
+await req('POST', '/api/poll', { cookie: bob, body: { question: 'do bob', options: ['sim', 'não'] } });
+const bp = (await req('GET', '/api/poll', { cookie: bob })).json.poll;
+ok((await CL(alice, bp.id)).status === 200, 'admin encerra enquete de outro');
+ok((await req('POST', '/api/poll', { cookie: bob, body: { question: 'nova', options: ['x', 'y'] } })).status === 200, 'criar nova substitui a encerrada');
+const np = (await req('GET', '/api/poll', { cookie: bob })).json.poll;
+ok(np.question === 'nova' && !np.closedAt && np.id !== bp.id, 'a nova enquete está aberta');
+ok((await CL(alice, np.id)).status === 200 && (await req('DELETE', `/api/poll/${np.id}`, { cookie: alice })).status === 200, 'admin encerra e remove enquete de outro');
+
 // logout invalida sessão
 const lo = await req('POST', '/api/logout', { cookie: bob });
 ok(lo.status === 200 && (await req('GET', '/api/me', { cookie: bob })).status === 401, 'logout invalida sessão');
