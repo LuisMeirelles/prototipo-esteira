@@ -1,5 +1,5 @@
 import { renderMarkdown } from './md.js';
-import { norm, searchEmojis } from './emojis.js';
+import { exactEmoji, norm, searchEmojis } from './emojis.js';
 import { SPINNER, startCamouflage, startFakePanes } from './fake.js';
 
 const $ = (id) => document.getElementById(id);
@@ -807,12 +807,11 @@ document.addEventListener('keydown', (e) => {
   modal.hidden = true;
 });
 
-/* ---------- comandos (/), menções (@) e emoji (/emoji) ---------- */
+/* ---------- comandos (/), menções (@) e emoji (:nome) ---------- */
 
 const mentionsMe = (m) => m.everyone || m.mentions.some((x) => x.id === state.me.id);
 
 const COMMANDS = [
-  { name: 'emoji', desc: 'abre os emojis (ex.: /emoji coração)', run: null },
   { name: 'img', desc: 'anexa uma imagem (ou cole / arraste)', run: () => $('file-input').click() },
   { name: 'camuflagem', desc: 'esconde o chat quando o mouse sai dele (liga/desliga)', run: toggleCamo },
   { name: 'enquete', desc: 'cria uma enquete (ou abre a ativa)', run: openPollCreate },
@@ -825,7 +824,6 @@ const sugg = { type: null, start: 0, end: 0, items: [], index: 0 };
 const cmdPop = $('cmd-pop');
 const mentionPop = $('mention-pop');
 const emojiPop = $('emoji-pop');
-const EMOJI_COLS = 8;
 
 function closeSuggest() {
   sugg.type = null;
@@ -837,13 +835,28 @@ function updateSuggest() {
   if (pos !== input.selectionEnd) return closeSuggest();
   const before = input.value.slice(0, pos);
 
-  // "/emoji" ou "/emoji coração": seletor com busca
-  let m = /(^|\s)\/emoji(?:[ \t]+(\S*))?$/i.exec(before);
+  // ":fire:" fechado (sem espaços): vira o emoji quando o nome não deixa dúvida, como no Slack
+  let m = /(^|\s):([a-z0-9_+\-à-ú]{2,32}):$/i.exec(before);
   if (m) {
-    const items = searchEmojis(m[2] ?? '').slice(0, 160);
-    Object.assign(sugg, { type: 'emoji', start: pos - (m[0].length - m[1].length), end: pos, items, index: 0 });
-    cmdPop.hidden = mentionPop.hidden = true;
-    return renderEmojiPop();
+    const hit = exactEmoji(m[2]);
+    if (hit) {
+      input.setRangeText(hit.char, pos - (m[0].length - m[1].length), pos, 'end');
+      closeSuggest();
+      return autosize();
+    }
+  }
+
+  // ":fi": lista aberta com busca (a partir de 2 letras, para ":)" ou ":D" seguirem como texto).
+  // O ":" precisa estar no começo ou depois de espaço, então "12:30" e "http://" não abrem nada.
+  m = /(^|\s):([a-z0-9_+\-à-ú]{2,32})$/i.exec(before);
+  if (m) {
+    const items = searchEmojis(m[2]).slice(0, 50);
+    // sem resultado a lista não abre, para o Enter continuar enviando a mensagem
+    if (items.length) {
+      Object.assign(sugg, { type: 'emoji', start: pos - (m[0].length - m[1].length), end: pos, items, index: 0 });
+      cmdPop.hidden = mentionPop.hidden = true;
+      return renderEmojiPop();
+    }
   }
 
   // "/": lista de comandos
@@ -901,17 +914,8 @@ function renderMentionPop() {
 
 function renderEmojiPop() {
   emojiPop.replaceChildren();
-  emojiPop.append(h('div', 'pop-head', '/emoji · digite para filtrar (ex.: /emoji coração) · setas navegam · ↵ insere'));
-  if (!sugg.items.length) emojiPop.append(h('div', 'pop-empty', 'nenhum emoji encontrado'));
   sugg.items.forEach((it, i) => {
-    const b = h('button', i === sugg.index ? 'active' : '', it.char);
-    b.type = 'button';
-    b.tabIndex = -1;
-    b.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      acceptSuggest(i);
-    });
-    emojiPop.append(b);
+    emojiPop.append(listRow(i, h('span', 'emo', it.char), h('span', 'item-name', `:${it.name}:`), h('span', 'item-sub', it.more)));
   });
   emojiPop.hidden = false;
   emojiPop.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
@@ -928,9 +932,7 @@ function acceptSuggest(i) {
       autosize();
       return it.run();
     }
-    input.setRangeText('/emoji ', 0, input.value.length, 'end'); // abre o seletor
-    input.focus();
-    return updateSuggest();
+    return;
   }
   input.setRangeText(type === 'emoji' ? it.char : `@${it.username} `, sugg.start, sugg.end, 'end');
   closeSuggest();
@@ -940,19 +942,18 @@ function acceptSuggest(i) {
 
 /** Teclado com o popup aberto. Retorna true se a tecla foi consumida. */
 function suggestKey(e) {
-  const emoji = sugg.type === 'emoji';
   const n = sugg.items.length;
-  const rerender = () => (emoji ? renderEmojiPop() : sugg.type === 'cmd' ? renderCmdPop() : renderMentionPop());
+  const rerender = () => (sugg.type === 'emoji' ? renderEmojiPop() : sugg.type === 'cmd' ? renderCmdPop() : renderMentionPop());
   const move = (d) => {
     if (!n) return;
     sugg.index = Math.max(0, Math.min(n - 1, sugg.index + d));
     rerender();
   };
   switch (e.key) {
-    case 'ArrowDown': move(emoji ? EMOJI_COLS : 1); break;
-    case 'ArrowUp': move(emoji ? -EMOJI_COLS : -1); break;
-    case 'ArrowRight': if (!emoji) return closeSuggest(), false; move(1); break;
-    case 'ArrowLeft': if (!emoji) return closeSuggest(), false; move(-1); break;
+    case 'ArrowDown': move(1); break;
+    case 'ArrowUp': move(-1); break;
+    case 'ArrowRight':
+    case 'ArrowLeft': return closeSuggest(), false;
     case 'Enter':
     case 'Tab':
       if (!n) return false;

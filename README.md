@@ -69,7 +69,7 @@ Para trocar o `INVITE_CODE`, edite o `.env` e rode `docker compose up -d`. Quem 
 ## Menções, emoji e notificações
 
 - **Menções:** digite `@` e escolha uma pessoa na lista, ou escreva `@usuario` (o mesmo usuário do login). `@todos` avisa a sala inteira. A mensagem fica destacada para quem foi mencionado.
-- **Emoji:** digite `/emoji` na caixa de texto para abrir o seletor. Dá para filtrar, por exemplo `/emoji coração`, navegar com as setas e inserir com Enter ou clique.
+- **Emoji:** digite `:` e o nome, sem espaços (por exemplo `:fire`), para abrir a lista a partir de 2 letras. Navegue com as setas e insira com Enter, Tab ou clique. Fechar com `:fire:` insere direto quando o nome é exato (ou um apelido que só um emoji tem). Os nomes são em inglês, no padrão do Slack/GitHub (`:joy:`, `:thumbsup:`, `:heart_eyes:`).
 - **Notificações:** o sino 🔔 no menu lateral alterna entre todas as mensagens, só menções e desligadas. Elas avisam com som, contador no título da aba (`(@2) Chat` quando há menção) e notificação do navegador. Só disparam quando a aba está em segundo plano. No primeiro clique o navegador pede permissão.
 - **Notificação do navegador e certificado autoassinado:** alguns navegadores bloqueiam notificações em sites com certificado não confiável. Se isso acontecer, instale o certificado raiz do Caddy (comando na seção "Rodar"). O som e o contador na aba funcionam mesmo assim.
 

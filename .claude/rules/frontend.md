@@ -15,5 +15,5 @@ paths:
 - Mensagens: o servidor é a fonte da verdade. Ações (enviar, editar, reagir, apagar) chamam a API e a UI atualiza pelos eventos do WebSocket, sem atualização otimista que possa divergir.
 - Texto da interface em português do Brasil. Mensagens de erro mapeadas por código em `ERRORS`/`AUTH_ERRORS`.
 - Markdown: ao estender `md.js`, só crie nós por `createElement`/`textContent`, valide protocolo de link e mantenha o limite de profundidade da recursão. Menções recebem a lista resolvida pelo servidor (`m.mentions`); o cliente não adivinha quem existe.
-- `/emoji` e `@` são sugestões acima da caixa (`updateSuggest`/`suggestKey`). O texto de ajuda fica no `.hint` abaixo da caixa: se criar um atalho ou comando novo, documente lá.
+- `:nome` (emoji), `/` (comandos) e `@` são sugestões acima da caixa (`updateSuggest`/`suggestKey`). O texto de ajuda fica no `.hint` abaixo da caixa: se criar um atalho ou comando novo, documente lá.
 - Depois de mudar o frontend, **olhe no navegador**: o teste automatizado não cobre a interface. Se não puder abrir, diga que não verificou.

@@ -13,7 +13,7 @@ Rode em `app/` e pare no primeiro problema real:
 
 Depois confira o que os testes **não** cobrem:
 
-- Mudou `app/web/`? O teste não toca na interface. Se conseguir abrir um navegador, veja a tela (login, enviar mensagem, spoiler de imagem, `/emoji`, `@`). Se não conseguir, diga claramente que o frontend não foi verificado visualmente. Não peça ao usuário para confiar.
+- Mudou `app/web/`? O teste não toca na interface. Se conseguir abrir um navegador, veja a tela (login, enviar mensagem, spoiler de imagem, `:fire` e `:fire:`, `@`). Se não conseguir, diga claramente que o frontend não foi verificado visualmente. Não peça ao usuário para confiar.
 - Mudou Docker/Caddy? Isso só se valida subindo os containers: use `/deploy-prod` (só com o usuário pedindo).
 - Mudou algo de segurança? Rode também `/security-audit`.
 
