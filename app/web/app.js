@@ -263,17 +263,45 @@ $('jump').addEventListener('click', () => {
   hideJump();
 });
 
-function updateTitle() {
-  document.title = state.unread ? `(${state.unreadMention ? '@' : ''}${state.unread}) ${BASE_TITLE}` : BASE_TITLE;
+// "Vendo o chat" = guia visível, janela com foco e chat não coberto pela camuflagem. Mensagem que chega fora
+// disso fica "não vista" e aparece em três lugares: título da guia, favicon e pílula sobre a camuflagem.
+const covered = () => camoOn && !camoEl.hidden;
+const watching = () => !document.hidden && document.hasFocus() && !covered();
+
+const FAVICON = '/favicon.svg';
+const faviconEl = document.querySelector('link[rel="icon"]');
+let badgeUrl = null;
+function setFavicon(unread, mention) {
+  if (!faviconEl) return;
+  if (badgeUrl) URL.revokeObjectURL(badgeUrl);
+  badgeUrl = null;
+  if (!unread) return void (faviconEl.href = FAVICON);
+  // bolinha no canto do ícone (vermelha se houver menção). blob: é permitido pela CSP (img-src 'self' blob:)
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#c96442"/>' +
+    '<text x="16" y="23" font-size="20" text-anchor="middle" fill="#fff" font-family="sans-serif">✺</text>' +
+    `<circle cx="24" cy="8" r="8" fill="${mention ? '#f75464' : '#6aab73'}" stroke="#1e1f22" stroke-width="2"/></svg>`;
+  badgeUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+  faviconEl.href = badgeUrl;
+}
+
+function updateBadge() {
+  const label = state.unread ? `${state.unreadMention ? '@' : ''}${state.unread > 99 ? '99+' : state.unread}` : '';
+  document.title = label ? `(${label}) ${BASE_TITLE}` : BASE_TITLE;
+  setFavicon(state.unread, state.unreadMention > 0);
+  const pill = $('camo-badge');
+  pill.textContent = label;
+  pill.classList.toggle('mention', state.unreadMention > 0);
+  pill.hidden = !label || !covered();
 }
 function clearUnread() {
   state.unread = state.unreadMention = 0;
-  updateTitle();
+  updateBadge();
 }
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) clearUnread();
-});
-window.addEventListener('focus', clearUnread);
+// só zera quando de fato está vendo (voltar para a guia com o mouse fora do chat não conta)
+const maybeClear = () => watching() && clearUnread();
+document.addEventListener('visibilitychange', maybeClear);
+window.addEventListener('focus', maybeClear);
 
 function scrollToMsg(id) {
   const el = state.els.get(id);
@@ -645,7 +673,7 @@ function connect() {
     state.wsTries = 0;
     renderStatus();
     if (reconnected) {
-      await loadHistory(); // recupera o que perdeu enquanto offline
+      await loadHistory(true); // recupera o que perdeu enquanto offline
       await loadPoll();
     }
   });
@@ -659,10 +687,12 @@ function connect() {
   });
 }
 
-async function loadHistory() {
+async function loadHistory(reconnected = false) {
   const data = await api('GET', '/api/messages');
   Object.values(data.users).forEach(remember);
   state.hasMore = data.hasMore;
+  // calculado depois do fetch: mensagem que chegou pelo WebSocket durante a busca já foi contada
+  const knownMax = state.messages.reduce((n, m) => Math.max(n, m.id), 0);
   state.messages = [];
   state.els.clear();
   list.replaceChildren();
@@ -675,6 +705,19 @@ async function loadHistory() {
   renderStatus();
   toBottom();
   hideJump();
+  if (reconnected) countMissed(data.messages.filter((m) => m.id > knownMax));
+}
+
+// Mensagens que chegaram com o WebSocket fora do ar vêm pelo histórico, não pelo evento `msg`: entram só no
+// contador de não vistas (sem som nem notificação, para não virar uma rajada quando a conexão volta).
+function countMissed(missed) {
+  if (watching()) return;
+  for (const m of missed) {
+    if (m.userId === state.me.id || m.deleted) continue;
+    state.unread++;
+    if (mentionsMe(m)) state.unreadMention++;
+  }
+  updateBadge();
 }
 
 /* ---------- perfil e sessão ---------- */
@@ -943,12 +986,14 @@ function beep() {
 
 function notifyIfNeeded(m) {
   if (m.userId === state.me.id) return;
-  if (!(document.hidden || !document.hasFocus())) return;
+  if (watching()) return;
   const mine = mentionsMe(m);
-  // o contador na aba sempre conta; som e notificação seguem a preferência
+  // o contador sempre conta; som e notificação seguem a preferência
   state.unread++;
   if (mine) state.unreadMention++;
-  updateTitle();
+  updateBadge();
+  // só chat coberto (guia visível e com foco): fica no contador, sem som nem notificação do sistema
+  if (!document.hidden && document.hasFocus()) return;
   if (state.notif === 'off' || (state.notif === 'mentions' && !mine)) return;
 
   beep();
@@ -994,6 +1039,12 @@ function readCamoPref() {
   }
 }
 
+function cover(on) {
+  camoEl.hidden = !on;
+  if (!on) maybeClear();
+  updateBadge();
+}
+
 function setCamo(on) {
   camoOn = on && canHover;
   if (camoOn && !camoStop) camoStop = startCamouflage(camoEl);
@@ -1003,7 +1054,7 @@ function setCamo(on) {
     camoEl.replaceChildren();
   }
   // começa coberto, a menos que o ponteiro já esteja em cima do chat
-  camoEl.hidden = !camoOn || chatPane.matches(':hover');
+  cover(camoOn && !chatPane.matches(':hover'));
 }
 
 function toggleCamo() {
@@ -1014,18 +1065,18 @@ function toggleCamo() {
   } catch {}
   setCamo(on);
   toast(`camuflagem ${on ? 'ligada: o chat some quando o mouse sai dele' : 'desligada'}`);
-  if (on) camoEl.hidden = true; // acabou de digitar o comando: o mouse está no chat
+  if (on) cover(false); // acabou de digitar o comando: o mouse está no chat
 }
 
 chatPane.addEventListener('pointerenter', (e) => {
-  if (e.pointerType === 'mouse') camoEl.hidden = true;
+  if (e.pointerType === 'mouse') cover(false);
 });
 chatPane.addEventListener('pointerleave', (e) => {
-  if (camoOn && e.pointerType === 'mouse') camoEl.hidden = false;
+  if (camoOn && e.pointerType === 'mouse') cover(true);
 });
 // mouse saiu da janela do navegador
 document.documentElement.addEventListener('mouseleave', () => {
-  if (camoOn) camoEl.hidden = false;
+  if (camoOn) cover(true);
 });
 
 /* ---------- enquete ---------- */
