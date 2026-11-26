@@ -378,6 +378,15 @@ const PANES = [
   { initialTitle: 'corrigir teste instável do checkout', model: 'claude-sonnet-5-5', effort: 'medium', cwd: '~/projetos/loja-web', branch: 'main' },
 ];
 
+const CAMO_CFG = { initialTitle: 'revisar PR de permissões', model: 'claude-opus-5-5', effort: 'high', cwd: '~/projetos/loja-api', branch: 'feature/permissoes' };
+
+/** Sessão decorativa que cobre o chat real (camuflagem). Retorna uma função para pará-la. */
+export function startCamouflage(root) {
+  const p = new FakePane(root, CAMO_CFG, shuffle(SCENARIOS));
+  p.run();
+  return () => p.stop();
+}
+
 /** Inicia os terminais decorativos nos elementos dados. Retorna uma função para pará-los. */
 export function startFakePanes(roots) {
   const order = shuffle(SCENARIOS);

@@ -239,6 +239,10 @@ a { color: var(--blue); }
 .poll-foot { margin-top: 16px; color: var(--dim); font-size: 11px; display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
 .poll-foot .link { color: var(--red); }
 
+/* ---------- camuflagem: cobre o chat real com uma sessão fake quando o mouse sai ---------- */
+.camo { position: absolute; inset: 0; z-index: 20; }
+@media (max-width: 760px) { .camo { display: none !important; } } /* sem os outros terminais não há o que imitar */
+
 /* ---------- telas estreitas: só o chat ---------- */
 @media (max-width: 760px) {
   .grid { grid-template: 1fr / 1fr; }

@@ -1,6 +1,6 @@
 import { renderMarkdown } from './md.js';
 import { norm, searchEmojis } from './emojis.js';
-import { SPINNER, startFakePanes } from './fake.js';
+import { SPINNER, startCamouflage, startFakePanes } from './fake.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_IMG_BYTES = 6 * 1024 * 1024;
@@ -724,6 +724,7 @@ const mentionsMe = (m) => m.everyone || m.mentions.some((x) => x.id === state.me
 const COMMANDS = [
   { name: 'emoji', desc: 'abre os emojis (ex.: /emoji coração)', run: null },
   { name: 'img', desc: 'anexa uma imagem (ou cole / arraste)', run: () => $('file-input').click() },
+  { name: 'camuflagem', desc: 'esconde o chat quando o mouse sai dele (liga/desliga)', run: toggleCamo },
   { name: 'enquete', desc: 'cria uma enquete (ou abre a ativa)', run: openPollCreate },
   { name: 'perfil', desc: 'nome, foto e senha', run: openProfile },
   { name: 'notif', desc: 'notificações: todas · só menções · off', run: cycleNotif },
@@ -956,9 +957,60 @@ async function loadUsers() {
   } catch {}
 }
 
+/* ---------- camuflagem ---------- */
+
+// Preferência de cada usuário, guardada só neste navegador. Ligada por padrão. Só faz sentido com mouse:
+// em tela de toque não existe "mouse fora", e o chat ficaria coberto para sempre.
+const canHover = matchMedia('(hover: hover) and (pointer: fine)').matches;
+const chatPane = $('chat-pane');
+const camoEl = $('camo');
+let camoOn = false;
+let camoStop = null;
+
+function readCamoPref() {
+  try {
+    return localStorage.getItem('camo') !== 'off';
+  } catch {
+    return true;
+  }
+}
+
+function setCamo(on) {
+  camoOn = on && canHover;
+  if (camoOn && !camoStop) camoStop = startCamouflage(camoEl);
+  if (!camoOn) {
+    camoStop?.();
+    camoStop = null;
+    camoEl.replaceChildren();
+  }
+  // começa coberto, a menos que o ponteiro já esteja em cima do chat
+  camoEl.hidden = !camoOn || chatPane.matches(':hover');
+}
+
+function toggleCamo() {
+  if (!canHover) return toast('camuflagem só funciona com mouse');
+  const on = !camoOn;
+  try {
+    localStorage.setItem('camo', on ? 'on' : 'off');
+  } catch {}
+  setCamo(on);
+  toast(`camuflagem ${on ? 'ligada: o chat some quando o mouse sai dele' : 'desligada'}`);
+  if (on) camoEl.hidden = true; // acabou de digitar o comando: o mouse está no chat
+}
+
+chatPane.addEventListener('pointerenter', (e) => {
+  if (e.pointerType === 'mouse') camoEl.hidden = true;
+});
+chatPane.addEventListener('pointerleave', (e) => {
+  if (camoOn && e.pointerType === 'mouse') camoEl.hidden = false;
+});
+// mouse saiu da janela do navegador
+document.documentElement.addEventListener('mouseleave', () => {
+  if (camoOn) camoEl.hidden = false;
+});
+
 /* ---------- enquete ---------- */
 
-const chatPane = $('chat-pane');
 const pollView = $('poll-view');
 const pollModal = $('poll-modal');
 let pollShown = false;
@@ -1216,6 +1268,7 @@ async function boot() {
   $('app').hidden = false;
   renderFooter();
   stopFake = startFakePanes([$('fake-0'), $('fake-1'), $('fake-2')]);
+  setCamo(readCamoPref());
   await loadUsers();
   if ('Notification' in window && Notification.permission === 'default') {
     toast('digite /notif para ativar as notificações do navegador');
