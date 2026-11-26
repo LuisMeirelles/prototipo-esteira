@@ -30,6 +30,7 @@ const state = {
   unreadMention: 0,
   notif: 'all',
   poll: null,
+  version: null,
 };
 let stopFake = null;
 
@@ -559,6 +560,21 @@ function applyUserUpdate(u) {
   }
 }
 
+// A primeira versão recebida é a desta página. Se uma reconexão trouxer outra, o servidor foi atualizado.
+function onServerVersion(v) {
+  if (typeof v !== 'string' || v === 'unknown') return;
+  if (!state.version) {
+    state.version = v;
+    return;
+  }
+  if (v === state.version) return;
+  // ocioso (nada digitado, sem anexo, sem janela aberta): recarrega sozinho; senão avisa sem perder o rascunho
+  const busy = input.value.trim() || state.pending.length || !modal.hidden || !pollModal.hidden;
+  if (busy) $('update-bar').hidden = false;
+  else location.reload();
+}
+$('update-reload').addEventListener('click', () => location.reload());
+
 function onWsMessage(ev) {
   let e;
   try {
@@ -601,6 +617,9 @@ function onWsMessage(ev) {
       break;
     case 'poll':
       setPoll(e.poll);
+      break;
+    case 'hello':
+      onServerVersion(e.version);
       break;
     case 'typing':
       clearTimeout(state.typing.get(e.userId));

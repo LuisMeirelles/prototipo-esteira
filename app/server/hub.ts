@@ -1,4 +1,5 @@
 import type { WebSocket } from 'ws';
+import { WEB_VERSION } from './version.ts';
 import { getUser, publicUser, sessionUser, type PublicUser } from './store.ts';
 
 interface Client {
@@ -35,6 +36,8 @@ export function addClient(ws: WebSocket, userId: number, token: string) {
   const c: Client = { ws, userId, token, alive: true, lastTyping: 0 };
   const wasOnline = mine.length > 0;
   clients.add(c);
+  // o cliente compara com o que recebeu antes: se mudou depois de reconectar, houve deploy
+  ws.send(JSON.stringify({ t: 'hello', version: WEB_VERSION }));
   ws.send(JSON.stringify({ t: 'presence', online: onlineUsers() }));
   if (!wasOnline) broadcast({ t: 'presence', online: onlineUsers() });
 

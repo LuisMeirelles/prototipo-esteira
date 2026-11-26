@@ -205,6 +205,7 @@ a { color: var(--blue); }
 .pw-box .link { margin-top: 10px; align-self: flex-start; }
 .modal-actions { display: flex; justify-content: flex-end; align-items: center; gap: 16px; margin-top: 14px; }
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bg2); border: 1px solid var(--line); color: var(--bright); padding: 6px 14px; border-radius: 6px; z-index: 60; max-width: calc(100vw - 32px); }
+.update-bar { position: fixed; top: 12px; right: 12px; z-index: 60; display: flex; gap: 10px; align-items: baseline; background: var(--bg2); border: 1px solid var(--orange); color: var(--bright); padding: 6px 12px; border-radius: 6px; max-width: calc(100vw - 24px); }
 .toast::before { content: '! '; color: var(--orange); }
 
 /* ---------- aba de enquete (visual do AskUserQuestion) ---------- */

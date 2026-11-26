@@ -12,7 +12,7 @@ paths:
 - **Sem migrações automáticas.** Alterar tabela existente exige migração explícita e idempotente em `db.ts` (ex.: checar `PRAGMA table_info` e `ALTER TABLE`), porque produção tem dados reais. Colunas novas: `ADD COLUMN` com `DEFAULT`.
 - Rota nova: use a skill `/add-endpoint`. Ordem fixa: autenticar → rate limit → validar entrada → autorizar sobre o recurso → agir → `broadcast` → responder.
 - Mensagens vistas pelos clientes são sempre `MessageView` montada por `buildViews` (campos derivados como `mentions` são calculados lá, não gravados). Mudou o formato? Atualize `app/web/app.js` e `test/smoke.mjs`.
-- Eventos WebSocket do servidor: `msg`, `edit`, `del`, `react`, `user`, `presence`, `typing`. Evento novo exige tratar o `case` em `onWsMessage` (`app.js`).
+- Eventos WebSocket do servidor: `msg`, `edit`, `del`, `react`, `user`, `presence`, `typing`, `poll`, `hello` (versão do frontend, enviada ao conectar: o cliente recarrega quando muda depois de reconectar). Evento novo exige tratar o `case` em `onWsMessage` (`app.js`).
 - Erros: responder `{ error: 'codigo_curto' }` com o status certo (400/401/403/404/409/413/415/429). Nunca devolver stack ou mensagem de exceção ao cliente.
 - Configuração só via `config.ts` (lê `process.env` uma vez e falha cedo se faltar algo obrigatório). Variável nova: documente em `.env.example`, nos dois `docker-compose.yml` e no `README.md`.
 - Logs: pino padrão do Fastify. Nunca logar corpo de requisição, cookie, senha, token nem convite.

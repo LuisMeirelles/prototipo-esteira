@@ -176,6 +176,14 @@ ok((await req('GET', '/api/me', { cookie: bob2 })).status === 401, 'troca de sen
 ok((await req('GET', '/api/me', { cookie: bob })).status === 200, 'sessão atual continua');
 ok((await req('POST', '/auth/login', { body: { username: 'bob', password: 'nova-senha-22' } })).status === 200, 'login com a nova senha');
 
+// versão do frontend: o servidor manda no WebSocket para os clientes saberem que houve deploy
+const wsHello = await wsOpen(alice, ORIGIN);
+await sleep(150);
+const hello = wsHello.events.find((e) => e.t === 'hello');
+ok(hello && /^[0-9a-f]{12}$/.test(hello.version), 'ws envia a versão do frontend ao conectar');
+ok(wsHello.events[0]?.t === 'hello', 'hello é o primeiro evento');
+wsHello.close();
+
 // enquete
 ok((await req('GET', '/api/poll')).status === 401, 'enquete sem sessão => 401');
 ok((await req('POST', '/api/poll', { body: { question: 'x', options: ['a', 'b'] } })).status === 401, 'criar enquete sem sessão => 401');
