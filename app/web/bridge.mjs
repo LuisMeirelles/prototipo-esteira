@@ -17,11 +17,17 @@
 import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
+import { readdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, resolve as resolvePath } from 'node:path';
 
 const CLAUDE = process.env.CLAUDE_BIN || 'claude';
 const MAX_BODY = 64 * 1024;
 const MAX_PROMPT = 32000;
 const MAX_RUNS = 4; // um por painel, com folga
+const MAX_SHELL = 4000;
+const SHELL_TIMEOUT_MS = 120_000;
+const MAX_SHELL_OUT = 1024 * 1024; // depois disso a saída é cortada, para não encher a memória do navegador
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function fail(msg) {
@@ -77,6 +83,70 @@ function readBody(req) {
   });
 }
 
+// Tab no painel: lista entradas do diretório a partir do que a pessoa digitou (relativo à pasta da ponte).
+// Mesmo nível de confiança do `claude` com permissão total; ainda assim só devolve nomes, nunca conteúdo.
+async function complete(res, body, cors) {
+  const prefix = body?.prefix;
+  if (typeof prefix !== 'string' || prefix.length > 1000) return json(res, 400, { error: 'invalid_body' }, cors);
+  const expanded = prefix === '~' || prefix.startsWith('~/') ? homedir() + prefix.slice(1) : prefix;
+  const full = resolvePath(process.cwd(), expanded);
+  const dir = expanded === '' || expanded.endsWith('/') ? full : dirname(full);
+  const base = expanded === '' || expanded.endsWith('/') ? '' : full.slice(dir.length + 1);
+  let items = [];
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    items = entries
+      .filter((e) => e.name.startsWith(base) && (base.startsWith('.') || !e.name.startsWith('.')))
+      .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
+      .sort()
+      .slice(0, 50);
+  } catch {
+    // diretório inexistente ou sem permissão: sem sugestões
+  }
+  return json(res, 200, { items, base }, cors);
+}
+
+// Modo shell (`!comando`): roda na pasta da ponte e devolve a saída em NDJSON. O comando vai como
+// argumento de `-c` porque é exatamente o que a pessoa quer executar; a barreira é Origin + token.
+function shell(res, body, cors) {
+  const command = body?.command;
+  if (typeof command !== 'string' || !command.trim() || command.length > MAX_SHELL) {
+    return json(res, 400, { error: 'invalid_body' }, cors);
+  }
+  if (running >= MAX_RUNS) return json(res, 429, { error: 'busy' }, cors);
+  running++;
+  const child = spawn(process.env.SHELL || '/bin/sh', ['-c', command], { stdio: ['ignore', 'pipe', 'pipe'] });
+  res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-store', ...cors });
+  let sent = 0;
+  const emit = (stream) => (d) => {
+    if (sent > MAX_SHELL_OUT) return;
+    sent += d.length;
+    res.write(JSON.stringify({ type: 'out', stream, data: d.toString().slice(0, 20000) }) + '\n');
+    if (sent > MAX_SHELL_OUT) {
+      res.write(JSON.stringify({ type: 'out', stream: 'stderr', data: '\n[saída cortada]\n' }) + '\n');
+      child.kill('SIGTERM');
+    }
+  };
+  child.stdout.on('data', emit('stdout'));
+  child.stderr.on('data', emit('stderr'));
+  const timer = setTimeout(() => child.kill('SIGKILL'), SHELL_TIMEOUT_MS);
+  let done = false;
+  const finish = (message, code) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    running--;
+    if (message) res.write(JSON.stringify({ type: 'bridge_error', message }) + '\n');
+    else res.write(JSON.stringify({ type: 'exit', code }) + '\n');
+    res.end();
+  };
+  child.on('error', (e) => finish(String(e.message)));
+  child.on('close', (code) => finish('', code));
+  res.on('close', () => {
+    if (!done) child.kill('SIGTERM');
+  });
+}
+
 const server = createServer(async (req, res) => {
   const port = server.address().port;
   if (req.headers.origin !== origin) return json(res, 403, { error: 'forbidden' });
@@ -101,7 +171,9 @@ const server = createServer(async (req, res) => {
   if (req.method === 'GET' && path === '/health') {
     return json(res, 200, { ok: true, cwd: process.cwd() }, cors);
   }
-  if (req.method !== 'POST' || path !== '/chat') return json(res, 404, { error: 'not_found' }, cors);
+  if (req.method !== 'POST' || !['/chat', '/shell', '/complete'].includes(path)) {
+    return json(res, 404, { error: 'not_found' }, cors);
+  }
 
   let body;
   try {
@@ -109,6 +181,8 @@ const server = createServer(async (req, res) => {
   } catch {
     return json(res, 400, { error: 'invalid_body' }, cors);
   }
+  if (path === '/complete') return complete(res, body, cors);
+  if (path === '/shell') return shell(res, body, cors);
   const prompt = body?.prompt;
   const session = body?.session ?? null;
   if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > MAX_PROMPT) {

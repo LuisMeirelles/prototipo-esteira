@@ -196,8 +196,6 @@ class FakePane {
       h('span', null, `Default · ${cfg.model} · ${cfg.effort} · `),
       this.footCtx,
     );
-    const path = h('div', 'path');
-    path.append(h('span', 'cwd', cfg.cwd), h('span', 'dim', ` · (${cfg.branch})`));
 
     const prompt = h('div', 'prompt');
     this.typed = h('span', 'typed');
@@ -205,7 +203,7 @@ class FakePane {
     this.ph = h('span', 'ph', 'pergunte algo ou descreva uma tarefa ↵');
     prompt.append(h('span', 'chev', '›'), this.typed, this.cursor, this.ph);
 
-    dock.append(this.think, this.credits, h('div', 'gap'), this.foot, path, prompt);
+    dock.append(this.think, this.credits, h('div', 'gap'), this.foot, prompt);
     root.replaceChildren(tabs, this.out, dock);
     this.setCtx();
     this.tick = setInterval(() => this.animate(), 130);
@@ -448,9 +446,37 @@ function resultText(content) {
   return '';
 }
 
+// Comandos tratados no próprio painel; qualquer outro `/algo` vai ao claude (skills e comandos dele).
+const LOCAL_CMDS = [
+  ['/help', 'lista os comandos do painel'],
+  ['/clear', 'limpa a tela e começa uma conversa nova'],
+  ['/sair', 'desconecta da ponte'],
+  ['/compact', 'resume a conversa (vai ao claude)'],
+  ['/cost', 'custo da sessão (vai ao claude)'],
+];
+
+async function bridgePost(path, body, signal) {
+  return fetch(`${bridge.base}${path}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${bridge.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+// prefixo comum mais longo entre os candidatos (para o Tab completar até onde há consenso)
+function commonPrefix(list) {
+  let p = list[0] ?? '';
+  for (const x of list) while (!x.startsWith(p)) p = p.slice(0, -1);
+  return p;
+}
+
 class LocalPane {
   constructor(root, cfg, onBack) {
     this.alive = true;
+    this.history = [];
+    this.histPos = -1;
+    this.draft = '';
     this.busy = false;
     this.session = null;
     this.cost = 0;
@@ -485,17 +511,19 @@ class LocalPane {
     this.foot = h('div', 'foot');
     this.footModel = h('span', null, 'claude');
     this.foot.append(h('span', null, 'Permissão total · '), this.footModel);
-    this.pathEl = h('div', 'path');
+    this.sugg = h('div', 'sugg');
+    this.sugg.hidden = true;
     const prompt = h('div', 'prompt real');
     this.input = h('input', 'real-input');
     this.input.autocomplete = 'off';
     this.input.spellcheck = false;
     this.input.maxLength = 8000;
     prompt.append(h('span', 'chev', '›'), this.input);
-    dock.append(this.think, this.credits, h('div', 'gap'), this.foot, this.pathEl, prompt);
+    dock.append(this.think, this.credits, h('div', 'gap'), this.foot, this.sugg, prompt);
     root.replaceChildren(tabs, this.out, dock);
 
     this.input.addEventListener('keydown', (e) => this.onKey(e));
+    this.input.addEventListener('input', () => this.showSugg([]));
     this.tick = setInterval(() => this.animate(), 130);
 
     if (bridge.base) this.ready();
@@ -534,7 +562,6 @@ class LocalPane {
     this.mode = 'code';
     this.input.type = 'password';
     this.input.placeholder = 'cole o código da ponte ↵';
-    this.pathEl.textContent = '';
     this.out.replaceChildren();
     this.note('Local · conecte ao Claude Code desta máquina', 'dim');
     this.note('1. No terminal da sua máquina (precisa de Node 24 e do claude), na pasta do projeto, cole:');
@@ -568,11 +595,11 @@ class LocalPane {
     this.mode = 'chat';
     this.input.type = 'text';
     this.input.placeholder = 'pergunte algo ou descreva uma tarefa ↵';
-    this.pathEl.replaceChildren(h('span', 'cwd', bridge.cwd || '~'));
     this.out.replaceChildren();
     const l = this.line();
     l.append(h('span', 'dot', '● '), h('span', null, 'Conectado ao Claude Code local'));
-    this.note('Esc interrompe · permissão total na pasta acima', 'dim indent');
+    this.note('Esc interrompe · permissão total na pasta da ponte', 'dim indent');
+    this.note('/ comandos · ! roda no shell · Tab completa · ↑↓ histórico', 'dim indent');
     this.out.append(h('div', 'line gap'));
   }
 
@@ -594,24 +621,161 @@ class LocalPane {
     }
   }
 
+  showSugg(items) {
+    this.sugg.hidden = !items.length;
+    this.sugg.replaceChildren();
+    if (items.length) this.sugg.append(h('span', 'dim', items.join('   ')));
+  }
+
+  // Tab: `/cmd` completa entre os comandos; `!cmd` e `@caminho` completam o último trecho como caminho
+  async complete() {
+    const v = this.input.value;
+    if (this.mode !== 'chat' || this.busy) return;
+    if (/^\/\S*$/.test(v)) {
+      const hits = LOCAL_CMDS.filter(([c]) => c.startsWith(v));
+      if (!hits.length) return;
+      const common = commonPrefix(hits.map(([c]) => c));
+      if (hits.length === 1) this.input.value = `${hits[0][0]} `;
+      else if (common.length > v.length) this.input.value = common;
+      this.showSugg(hits.length > 1 ? hits.map(([c]) => c) : []);
+      return;
+    }
+    const m = /(^|\s)(!?)(@?)(\S*)$/.exec(v);
+    if (!m || !(v.startsWith('!') || m[3])) return;
+    const token = m[4];
+    const head = v.slice(0, v.length - token.length);
+    this.busy = true;
+    try {
+      const res = await bridgePost('/complete', { prefix: token });
+      if (!res.ok || !this.alive || this.input.value !== v) return;
+      const { items } = await res.json();
+      if (!Array.isArray(items) || !items.length) return this.showSugg([]);
+      const names = items.filter((x) => typeof x === 'string');
+      const base = token.endsWith('/') || token === '' ? '' : token.slice(token.lastIndexOf('/') + 1);
+      const dir = token.slice(0, token.length - base.length);
+      const common = commonPrefix(names);
+      if (names.length === 1) this.input.value = `${head}${dir}${names[0]}`;
+      else if (common.length > base.length) this.input.value = `${head}${dir}${common}`;
+      this.showSugg(names.length > 1 ? names.map((x) => clip(x, 40)) : []);
+    } catch {
+      // sem sugestões
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  historyStep(dir) {
+    if (!this.history.length) return;
+    if (this.histPos === -1) {
+      if (dir > 0) return;
+      this.draft = this.input.value;
+      this.histPos = this.history.length;
+    }
+    this.histPos = Math.min(this.history.length, Math.max(0, this.histPos + dir));
+    this.input.value = this.histPos >= this.history.length ? this.draft : this.history[this.histPos];
+    if (this.histPos >= this.history.length) this.histPos = -1;
+  }
+
   async onKey(e) {
     if (e.key === 'Escape' && this.busy) {
       e.preventDefault();
       this.ctrl?.abort();
       return;
     }
+    if (e.key === 'Tab' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      return this.complete();
+    }
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && this.mode === 'chat') {
+      e.preventDefault();
+      return this.historyStep(e.key === 'ArrowUp' ? -1 : 1);
+    }
     if (e.key !== 'Enter' || e.isComposing) return;
     e.preventDefault();
     const text = this.input.value.trim();
     if (!text || this.busy) return;
     this.input.value = '';
+    this.showSugg([]);
     if (this.mode === 'code') return this.tryConnect(text);
+    this.history.push(text);
+    if (this.history.length > 100) this.history.shift();
+    this.histPos = -1;
     if (text === '/sair') {
       bridge.base = bridge.token = null;
       this.session = null;
       return this.askCode();
     }
+    if (text === '/clear') {
+      this.session = null;
+      this.cost = 0;
+      this.credits.textContent = '';
+      return this.ready();
+    }
+    if (text === '/help') {
+      this.line('user').append(h('span', 'chev', '› '), h('span', null, text));
+      for (const [c, d] of LOCAL_CMDS) this.note(`${c}  ${d}`, 'dim indent');
+      this.note('!comando  roda no shell da sua máquina, na pasta da ponte (120 s no máximo)', 'dim indent');
+      this.note('@caminho  Tab completa nomes de arquivos; qualquer outro /comando vai ao claude', 'dim indent');
+      return;
+    }
+    if (text.startsWith('!')) return this.runShell(text.slice(1).trim());
     return this.ask(text);
+  }
+
+  async runShell(command) {
+    if (!command) return;
+    this.busy = true;
+    this.credits.textContent = '';
+    this.line('user').append(h('span', 'chev', '! '), h('span', null, command));
+    this.setThinking(true);
+    this.ctrl = new AbortController();
+    try {
+      const res = await bridgePost('/shell', { command }, this.ctrl.signal);
+      if (res.status === 429) throw new Error('A ponte está ocupada com outras sessões. Tente de novo em instantes.');
+      if (!res.ok) throw new Error(`A ponte respondeu com erro (${res.status}).`);
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buf = '';
+      const handle = (raw) => {
+        let ev;
+        try {
+          ev = JSON.parse(raw);
+        } catch {
+          return;
+        }
+        if (ev?.type === 'out' && typeof ev.data === 'string') {
+          for (const ln of ev.data.replace(/\r/g, '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split('\n')) {
+            if (ln !== '') this.note(clip(ln, 500), ev.stream === 'stderr' ? 'err indent' : 'indent');
+          }
+        } else if (ev?.type === 'exit' && ev.code) {
+          this.note(`saiu com código ${Number(ev.code)}`, 'dim indent');
+        } else if (ev?.type === 'bridge_error') {
+          this.note(clip(String(ev.message ?? 'Erro na ponte.'), 300), 'err');
+        }
+      };
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += value;
+        for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
+          handle(buf.slice(0, i));
+          buf = buf.slice(i + 1);
+        }
+      }
+      if (buf.trim()) handle(buf);
+    } catch (err) {
+      if (!this.alive) return;
+      if (err.name === 'AbortError') this.note('Interrompido.', 'dim');
+      else this.note(err.message || 'Falha na conexão com a ponte.', 'err');
+    } finally {
+      this.busy = false;
+      this.ctrl = null;
+      if (this.alive) {
+        this.setThinking(false);
+        this.out.append(h('div', 'line gap'));
+        this.out.scrollTop = this.out.scrollHeight;
+        this.input.focus();
+      }
+    }
   }
 
   async tryConnect(code) {
@@ -636,12 +800,7 @@ class LocalPane {
     const started = Date.now();
     this.ctrl = new AbortController();
     try {
-      const res = await fetch(`${bridge.base}/chat`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${bridge.token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, session: this.session }),
-        signal: this.ctrl.signal,
-      });
+      const res = await bridgePost('/chat', { prompt, session: this.session }, this.ctrl.signal);
       if (res.status === 429) throw new Error('A ponte está ocupada com outras sessões. Tente de novo em instantes.');
       if (!res.ok) throw new Error(`A ponte respondeu com erro (${res.status}).`);
       const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();

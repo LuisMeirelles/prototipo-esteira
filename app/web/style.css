@@ -87,11 +87,10 @@ a { color: var(--blue); }
 .think[hidden] { display: block !important; visibility: hidden; }
 .think .spin, .think .verb { color: var(--orange); }
 .status { color: var(--dim); min-height: 1.55em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sugg { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 1ch; }
 .gap { height: 0.8em; }
 .foot { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .foot .ctx { color: var(--green); }
-.path { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.path .cwd { color: var(--purple); }
 .prompt { margin-top: 6px; display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .prompt .chev { color: var(--dim); margin-right: 1ch; }
 .prompt .ph, .prompt .enter { color: var(--dim); }

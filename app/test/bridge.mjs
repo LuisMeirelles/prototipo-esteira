@@ -62,6 +62,25 @@ ok((await rawHost(`127.0.0.1:${port}`)) === 200, 'ponte: Host de loopback legít
   const f = await chat({ prompt: 'falha' });
   ok((await f.text()).includes('"bridge_error"'), 'ponte: erro do claude vira bridge_error');
 
+  // modo shell e Tab: mesmas barreiras do /chat
+  const post = (path, body, headers = good) => fetch(`${base}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+  const sh = await post('/shell', { command: 'echo oi; echo erro >&2; exit 3' });
+  const shLines = (await sh.text()).trim().split('\n').map((l) => JSON.parse(l));
+  ok(shLines.some((l) => l.type === 'out' && l.stream === 'stdout' && l.data.includes('oi')), 'ponte: /shell devolve a saída');
+  ok(shLines.some((l) => l.type === 'out' && l.stream === 'stderr' && l.data.includes('erro')), 'ponte: /shell separa stderr');
+  ok(shLines.at(-1).type === 'exit' && shLines.at(-1).code === 3, 'ponte: /shell informa o código de saída');
+  ok((await post('/shell', { command: 'echo x' }, { origin: ORIGIN, 'content-type': 'application/json' })).status === 401, 'ponte: /shell sem token → 401');
+  ok((await post('/shell', { command: 'echo x' }, { ...good, origin: 'https://evil.test' })).status === 403, 'ponte: /shell com Origin errado → 403');
+  ok((await post('/shell', { command: '' })).status === 400, 'ponte: /shell vazio → 400');
+  ok((await post('/shell', { command: 'x'.repeat(4001) })).status === 400, 'ponte: /shell grande demais → 400');
+  ok((await post('/shell', { command: ['ls'] })).status === 400, 'ponte: /shell com tipo errado → 400');
+  const cp = await post('/complete', { prefix: 'test/fake-c' });
+  ok((await cp.json()).items.includes('fake-claude.mjs'), 'ponte: /complete lista nomes pelo prefixo');
+  const cd = await post('/complete', { prefix: 'te' });
+  ok((await cd.json()).items.includes('test/'), 'ponte: /complete marca diretório com /');
+  ok((await post('/complete', { prefix: 'x'.repeat(1001) })).status === 400, 'ponte: /complete prefixo grande demais → 400');
+  ok((await post('/complete', { prefix: 'test/' }, { origin: ORIGIN, 'content-type': 'application/json' })).status === 401, 'ponte: /complete sem token → 401');
+
   const ctrl = new AbortController();
   const s = await fetch(`${base}/chat`, { method: 'POST', headers: good, body: JSON.stringify({ prompt: 'dorme' }), signal: ctrl.signal });
   await s.body.getReader().read();
