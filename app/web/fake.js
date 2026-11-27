@@ -803,7 +803,6 @@ class LocalPane {
         this.setThinking(false);
         this.out.append(h('div', 'line gap'));
         this.out.scrollTop = this.out.scrollHeight;
-        this.input.focus();
       }
     }
   }
@@ -859,7 +858,6 @@ class LocalPane {
         this.credits.textContent = `▸ Credits: session ${this.cost.toFixed(2)} | Time: ${dur}`;
         this.out.append(h('div', 'line gap'));
         this.out.scrollTop = this.out.scrollHeight;
-        this.input.focus();
       }
     }
   }
