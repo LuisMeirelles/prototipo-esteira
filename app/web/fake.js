@@ -152,7 +152,7 @@ const SCENARIOS = [
 /* ---------- painel ---------- */
 
 class FakePane {
-  constructor(root, cfg, scenarios) {
+  constructor(root, cfg, scenarios, hooks = {}) {
     this.cfg = cfg;
     this.queue = scenarios;
     this.alive = true;
@@ -164,7 +164,19 @@ class FakePane {
     this.titleEl = h('span', 'title', cfg.initialTitle);
     const t1 = h('span', 'tab active');
     t1.append(h('span', 'star', '✳'), this.titleEl, h('span', 'x', '×'));
-    tabs.append(t0, t1, h('span', 'tab', 'Local'), h('span', 'plus', '＋'));
+    const localTab = h('span', 'tab', 'Local');
+    if (hooks.onLocal) {
+      localTab.setAttribute('role', 'tab');
+      localTab.tabIndex = 0;
+      localTab.addEventListener('click', hooks.onLocal);
+      localTab.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          hooks.onLocal();
+        }
+      });
+    }
+    tabs.append(t0, t1, localTab, h('span', 'plus', '＋'));
 
     this.out = h('div', 'out');
     this.out.setAttribute('aria-hidden', 'true');
@@ -372,6 +384,343 @@ class FakePane {
   }
 }
 
+/* ---------- sessão local (Claude Code CLI da própria pessoa) ---------- */
+// Fala com a ponte `bridge/bridge.mjs`, que a pessoa roda na máquina dela. O código
+// (porta.token) fica só em memória: recarregar a página pede de novo.
+
+const bridge = { base: null, token: null, cwd: null };
+const CODE_RE = /^(\d{1,5})\.([A-Za-z0-9_-]{20,64})$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function connectBridge(code) {
+  const m = CODE_RE.exec(code.trim());
+  if (!m) throw new Error('Código inválido. O formato é porta.token, como mostrado pela ponte.');
+  const base = `http://127.0.0.1:${m[1]}`;
+  let res;
+  try {
+    res = await fetch(`${base}/health`, { headers: { authorization: `Bearer ${m[2]}` }, cache: 'no-store' });
+  } catch {
+    throw new Error('Não consegui falar com a ponte. Ela está rodando? (Safari bloqueia esse acesso; use Chrome ou Firefox.)');
+  }
+  if (res.status === 401) throw new Error('A ponte recusou o código. Confira se copiou inteiro.');
+  if (res.status === 403) throw new Error('A ponte foi iniciada para outro endereço de chat. Reinicie-a com o endereço mostrado acima.');
+  if (!res.ok) throw new Error(`A ponte respondeu com erro (${res.status}).`);
+  const info = await res.json().catch(() => ({}));
+  bridge.base = base;
+  bridge.token = m[2];
+  bridge.cwd = typeof info.cwd === 'string' ? info.cwd : '';
+}
+
+// Comando de uma linha que baixa a ponte do próprio chat e só a executa se o SHA-256 bater. O hash é
+// calculado aqui, no navegador, que já validou o HTTPS; o `curl -k` (certificado autoassinado) fica
+// seguro porque um arquivo adulterado no caminho não passa na conferência.
+let bridgeCmd = null;
+function bridgeCommand() {
+  bridgeCmd ??= (async () => {
+    const res = await fetch('/bridge.mjs', { cache: 'no-store' });
+    if (!res.ok) throw new Error('bridge');
+    const sum = await crypto.subtle.digest('SHA-256', await res.arrayBuffer());
+    const hash = [...new Uint8Array(sum)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    const o = location.origin;
+    return (
+      `d=$(mktemp -d) && curl -fsSk '${o}/bridge.mjs' -o "$d/bridge.mjs" && ` +
+      `[ "$( (sha256sum "$d/bridge.mjs" 2>/dev/null || shasum -a 256 "$d/bridge.mjs") | cut -d' ' -f1)" = ${hash} ] && ` +
+      `node "$d/bridge.mjs" '${o}'`
+    );
+  })().catch((e) => {
+    bridgeCmd = null;
+    throw e;
+  });
+  return bridgeCmd;
+}
+
+const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+function toolArg(input) {
+  const i = input && typeof input === 'object' ? input : {};
+  const v = i.command ?? i.file_path ?? i.pattern ?? i.path ?? i.url ?? i.description ?? i.prompt ?? '';
+  return clip((typeof v === 'string' ? v : JSON.stringify(v)).replace(/\s+/g, ' '), 100);
+}
+
+function resultText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map((b) => (b && typeof b.text === 'string' ? b.text : '')).join('\n');
+  return '';
+}
+
+class LocalPane {
+  constructor(root, cfg, onBack) {
+    this.alive = true;
+    this.busy = false;
+    this.session = null;
+    this.cost = 0;
+    this.ctrl = null;
+    this.frame = 0;
+
+    const tabs = h('div', 'tabs');
+    const back = h('span', 'tab', cfg.initialTitle);
+    back.setAttribute('role', 'tab');
+    back.tabIndex = 0;
+    back.title = 'Voltar à simulação';
+    back.addEventListener('click', onBack);
+    back.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onBack();
+      }
+    });
+    const loc = h('span', 'tab active');
+    loc.append(h('span', 'star', '✳'), h('span', 'title', 'Local'));
+    tabs.append(h('span', 'tab dim', 'Terminal'), back, loc, h('span', 'plus', '＋'));
+
+    this.out = h('div', 'out scroll');
+    const dock = h('div', 'dock');
+    this.think = h('div', 'think');
+    this.think.hidden = true;
+    this.spin = h('span', 'spin', '✻');
+    this.verb = h('span', 'verb', 'Working…');
+    this.meta = h('span', 'meta');
+    this.think.append(this.spin, this.verb, this.meta);
+    this.credits = h('div', 'status');
+    this.foot = h('div', 'foot');
+    this.footModel = h('span', null, 'claude');
+    this.foot.append(h('span', null, 'Permissão total · '), this.footModel);
+    this.pathEl = h('div', 'path');
+    const prompt = h('div', 'prompt real');
+    this.input = h('input', 'real-input');
+    this.input.autocomplete = 'off';
+    this.input.spellcheck = false;
+    this.input.maxLength = 8000;
+    prompt.append(h('span', 'chev', '›'), this.input);
+    dock.append(this.think, this.credits, h('div', 'gap'), this.foot, this.pathEl, prompt);
+    root.replaceChildren(tabs, this.out, dock);
+
+    this.input.addEventListener('keydown', (e) => this.onKey(e));
+    this.tick = setInterval(() => this.animate(), 130);
+
+    if (bridge.base) this.ready();
+    else this.askCode();
+    this.input.focus();
+  }
+
+  stop() {
+    this.alive = false;
+    clearInterval(this.tick);
+    this.ctrl?.abort();
+  }
+
+  line(cls) {
+    const el = h('div', cls ? `line ${cls}` : 'line');
+    this.out.append(el);
+    while (this.out.childElementCount > 400) this.out.firstElementChild.remove();
+    this.out.scrollTop = this.out.scrollHeight;
+    return el;
+  }
+
+  // `trechos` viram texto destacado, igual ao simulado
+  inline(el, text) {
+    text.split('`').forEach((part, i) => {
+      if (!part) return;
+      if (i % 2) el.append(h('span', 'hl', part));
+      else el.append(document.createTextNode(part));
+    });
+  }
+
+  note(text, cls) {
+    this.line(cls).textContent = text;
+  }
+
+  askCode() {
+    this.mode = 'code';
+    this.input.type = 'password';
+    this.input.placeholder = 'cole o código da ponte ↵';
+    this.pathEl.textContent = '';
+    this.out.replaceChildren();
+    this.note('Local · conecte ao Claude Code desta máquina', 'dim');
+    this.note('1. No terminal da sua máquina (precisa de Node 24 e do claude), na pasta do projeto, cole:');
+    const cmd = this.line('indent');
+    cmd.append(h('span', 'dim', 'gerando comando…'));
+    bridgeCommand().then(
+      (text) => {
+        if (!this.alive) return;
+        const copy = h('button', 'link', 'copiar');
+        copy.type = 'button';
+        copy.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(text);
+            copy.textContent = 'copiado';
+          } catch {
+            copy.textContent = 'selecione e copie à mão';
+          }
+        });
+        cmd.replaceChildren(h('span', 'hl', text), document.createTextNode(' '), copy);
+        this.out.scrollTop = this.out.scrollHeight;
+      },
+      () => {
+        if (this.alive) cmd.replaceChildren(h('span', 'err', 'Não consegui preparar o comando. Recarregue a página.'));
+      },
+    );
+    this.note('2. Cole abaixo o código mostrado (porta.token) e tecle Enter.');
+    this.note('A ponte roda o Claude Code com permissão total nessa pasta.', 'dim');
+  }
+
+  ready() {
+    this.mode = 'chat';
+    this.input.type = 'text';
+    this.input.placeholder = 'pergunte algo ou descreva uma tarefa ↵';
+    this.pathEl.replaceChildren(h('span', 'cwd', bridge.cwd || '~'));
+    this.out.replaceChildren();
+    const l = this.line();
+    l.append(h('span', 'dot', '● '), h('span', null, 'Conectado ao Claude Code local'));
+    this.note('Esc interrompe · permissão total na pasta acima', 'dim indent');
+    this.out.append(h('div', 'line gap'));
+  }
+
+  animate() {
+    if (this.think.hidden || reduced || document.hidden) return;
+    this.frame++;
+    this.spin.textContent = SPINNER[this.frame % SPINNER.length];
+    if (this.frame % 8 === 0) {
+      this.meta.textContent = ` (${Math.floor((Date.now() - this.t0) / 1000)}s · esc to interrupt)`;
+    }
+  }
+
+  setThinking(on) {
+    this.think.hidden = !on;
+    if (on) {
+      this.t0 = Date.now();
+      this.verb.textContent = `${pick(VERBS)}…`;
+      this.meta.textContent = ' (0s · esc to interrupt)';
+    }
+  }
+
+  async onKey(e) {
+    if (e.key === 'Escape' && this.busy) {
+      e.preventDefault();
+      this.ctrl?.abort();
+      return;
+    }
+    if (e.key !== 'Enter' || e.isComposing) return;
+    e.preventDefault();
+    const text = this.input.value.trim();
+    if (!text || this.busy) return;
+    this.input.value = '';
+    if (this.mode === 'code') return this.tryConnect(text);
+    if (text === '/sair') {
+      bridge.base = bridge.token = null;
+      this.session = null;
+      return this.askCode();
+    }
+    return this.ask(text);
+  }
+
+  async tryConnect(code) {
+    this.busy = true;
+    try {
+      await connectBridge(code);
+      if (this.alive) this.ready();
+    } catch (err) {
+      if (this.alive) this.note(err.message, 'err');
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async ask(prompt) {
+    this.busy = true;
+    this.credits.textContent = '';
+    const echo = this.line('user');
+    echo.append(h('span', 'chev', '› '), h('span', null, prompt));
+    this.out.append(h('div', 'line gap'));
+    this.setThinking(true);
+    const started = Date.now();
+    this.ctrl = new AbortController();
+    try {
+      const res = await fetch(`${bridge.base}/chat`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bridge.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt, session: this.session }),
+        signal: this.ctrl.signal,
+      });
+      if (res.status === 429) throw new Error('A ponte está ocupada com outras sessões. Tente de novo em instantes.');
+      if (!res.ok) throw new Error(`A ponte respondeu com erro (${res.status}).`);
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += value;
+        for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
+          this.event(buf.slice(0, i));
+          buf = buf.slice(i + 1);
+        }
+      }
+      if (buf.trim()) this.event(buf);
+    } catch (err) {
+      if (!this.alive) return;
+      if (err.name === 'AbortError') this.note('Interrompido.', 'dim');
+      else this.note(err.message || 'Falha na conexão com a ponte.', 'err');
+    } finally {
+      this.busy = false;
+      this.ctrl = null;
+      if (this.alive) {
+        this.setThinking(false);
+        const secs = Math.max(1, Math.round((Date.now() - started) / 1000));
+        const dur = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
+        this.credits.textContent = `▸ Credits: session ${this.cost.toFixed(2)} | Time: ${dur}`;
+        this.out.append(h('div', 'line gap'));
+        this.out.scrollTop = this.out.scrollHeight;
+        this.input.focus();
+      }
+    }
+  }
+
+  // uma linha NDJSON do `claude -p --output-format stream-json`; tudo aqui é dado externo
+  event(raw) {
+    let ev;
+    try {
+      ev = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!ev || typeof ev !== 'object') return;
+    if (ev.type === 'system' && ev.subtype === 'init') {
+      if (typeof ev.session_id === 'string' && UUID_RE.test(ev.session_id)) this.session = ev.session_id;
+      if (typeof ev.model === 'string') this.footModel.textContent = clip(ev.model, 40);
+    } else if (ev.type === 'assistant') {
+      const blocks = Array.isArray(ev.message?.content) ? ev.message.content : [];
+      for (const b of blocks) {
+        if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+          const l = this.line();
+          l.append(h('span', 'bullet', '• '));
+          const body = h('span');
+          this.inline(body, b.text.trim());
+          l.append(body);
+        } else if (b?.type === 'tool_use') {
+          const l = this.line();
+          l.append(h('span', 'dot', '● '), h('span', 'tool', clip(String(b.name ?? 'Tool'), 30)), h('span', 'dim', `(${toolArg(b.input)})`));
+        }
+      }
+    } else if (ev.type === 'user') {
+      const blocks = Array.isArray(ev.message?.content) ? ev.message.content : [];
+      for (const b of blocks) {
+        if (b?.type !== 'tool_result') continue;
+        const lines = resultText(b.content).split('\n').filter((x) => x.trim());
+        const first = clip(lines[0] ?? '(sem saída)', 160);
+        const more = lines.length > 1 ? ` … +${lines.length - 1} linhas` : '';
+        const r = this.line('dim indent');
+        r.append(h('span', 'tree', '⎿  '), h('span', b.is_error ? 'err' : null, first + more));
+      }
+    } else if (ev.type === 'result') {
+      if (typeof ev.session_id === 'string' && UUID_RE.test(ev.session_id)) this.session = ev.session_id;
+      if (typeof ev.total_cost_usd === 'number') this.cost += ev.total_cost_usd;
+      if (ev.is_error) this.note(clip(String(ev.result ?? 'Erro do Claude Code.'), 300), 'err');
+    } else if (ev.type === 'bridge_error') {
+      this.note(clip(String(ev.message ?? 'Erro na ponte.'), 300), 'err');
+    }
+  }
+}
+
 const PANES = [
   { initialTitle: 'refatorar cálculo de frete', model: 'claude-opus-5-5', effort: 'medium', cwd: '~/projetos/loja-api', branch: 'feature/frete' },
   { initialTitle: 'migração da tabela de estoque', model: 'claude-opus-5-5', effort: 'high', cwd: '~/projetos/loja-api', branch: 'homolog' },
@@ -390,7 +739,22 @@ export function startCamouflage(root) {
 /** Inicia os terminais decorativos nos elementos dados. Retorna uma função para pará-los. */
 export function startFakePanes(roots) {
   const order = shuffle(SCENARIOS);
-  const panes = roots.map((root, i) => new FakePane(root, PANES[i % PANES.length], order.slice(i * 2).concat(order.slice(0, i * 2))));
-  panes.forEach((p, i) => setTimeout(() => p.run(), i * 1200)); // começam defasados
-  return () => panes.forEach((p) => p.stop());
+  const cur = [];
+  const cfgOf = (i) => PANES[i % PANES.length];
+  const fake = (i, queue, delay) => {
+    const p = new FakePane(roots[i], cfgOf(i), queue, { onLocal: () => local(i) });
+    cur[i] = p;
+    setTimeout(() => p.run(), delay);
+  };
+  // a aba "Local" troca o painel pela sessão real; clicar na outra aba volta à simulação
+  const local = (i) => {
+    cur[i].stop();
+    const p = new LocalPane(roots[i], cfgOf(i), () => {
+      p.stop();
+      fake(i, shuffle(SCENARIOS), 0);
+    });
+    cur[i] = p;
+  };
+  roots.forEach((_, i) => fake(i, order.slice(i * 2).concat(order.slice(0, i * 2)), i * 1200)); // começam defasados
+  return () => cur.forEach((p) => p.stop());
 }

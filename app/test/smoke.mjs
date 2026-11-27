@@ -43,6 +43,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const alice = await login('Alice');
 const bob = await login('Bob');
+{
+  // a CSP só abre o loopback (ponte local); nenhum outro host nem curinga de rede
+  const csp = (await req('GET', '/')).headers.get('content-security-policy') ?? '';
+  const connect = /connect-src ([^;]*)/.exec(csp)?.[1] ?? '';
+  ok(connect.split(' ').every((t) => ["'self'", 'http://127.0.0.1:*'].includes(t) || t.startsWith('wss://')), 'CSP: connect-src libera só o próprio host e o loopback da ponte');
+  ok(connect.includes('http://127.0.0.1:*'), 'CSP: connect-src inclui a ponte local');
+}
+{
+  // a ponte é pública (sem segredo); o painel confere o hash antes de rodá-la
+  const br = await req('GET', '/bridge.mjs', { origin: null, xr: null });
+  const disk = (await import('node:fs')).readFileSync(new URL('../web/bridge.mjs', import.meta.url));
+  ok(br.status === 200 && br.buf.equals(disk) && br.headers.get('x-content-type-options') === 'nosniff', 'GET /bridge.mjs entrega o arquivo da ponte, igual ao do disco');
+  ok(!br.buf.toString().includes(INVITE) && !br.buf.toString().includes('__Host-sid'), 'bridge.mjs público não contém convite nem nome do cookie de sessão');
+}
 ok(alice && bob, 'cadastro com convite');
 ok((await req('POST', '/auth/register', { body: { username: 'eve', password: 'senha-forte-1', invite: 'errado' }, ip: '10.8.0.1' })).status === 403, 'convite errado => 403');
 ok((await req('POST', '/auth/register', { body: { username: 'eve', password: 'senha-forte-1' }, ip: '10.8.0.2' })).status === 403, 'sem convite => 403');

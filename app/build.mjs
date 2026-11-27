@@ -36,4 +36,5 @@ for (const [out, meta] of Object.entries(web.metafile.outputs)) {
 }
 await writeFile('dist/web/index.html', html);
 await cp('web/favicon.svg', 'dist/web/favicon.svg');
+await cp('web/bridge.mjs', 'dist/web/bridge.mjs'); // baixada pelo comando do painel "Local"
 console.log('build ok');

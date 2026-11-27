@@ -25,7 +25,8 @@ const CSP = [
   "script-src 'self'",
   "style-src 'self'",
   "img-src 'self' blob:",
-  `connect-src 'self' wss://${origin.host}`,
+  // loopback só para a ponte local dos terminais "Local" (web/bridge.mjs); ela exige token e Origin
+  `connect-src 'self' wss://${origin.host} http://127.0.0.1:*`,
   "font-src 'self'",
   "manifest-src 'self'",
   "base-uri 'none'",

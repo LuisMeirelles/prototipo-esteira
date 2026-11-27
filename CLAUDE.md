@@ -10,7 +10,7 @@ Node 24 + Fastify 5 + `@fastify/websocket` + SQLite (`node:sqlite`, sem ORM) · 
 
 ```
 app/server/   API, WebSocket, auth, banco (TypeScript rodado direto pelo Node)
-app/web/      index.html, app.js, md.js, emojis.js, fake.js (terminais decorativos e camuflagem), style.css
+app/web/      index.html, app.js, md.js, emojis.js, fake.js (terminais decorativos e camuflagem), style.css, bridge.mjs (ponte local, baixada pelos usuários)
 app/test/     smoke.mjs (integração) e run.mjs (sobe servidor descartável)
 app/build.mjs build de produção (dist/server.mjs, dist/cli.mjs, dist/web/ com hash)
 dev/          compose de desenvolvimento (bind mount, node --watch)
@@ -44,6 +44,10 @@ Docker (sempre com `--env-file ../.env`, dentro de `prod/` ou `dev/`): `docker c
 ## Invariantes de segurança (não quebrar)
 
 Detalhes em `.claude/rules/security.md`. Resumo: toda requisição que altera estado exige `Origin` exato + `X-Requested-With: chat`; o WebSocket valida `Origin` e sessão antes do upgrade; toda rota `/api` e `/media` exige sessão; dono ou admin é checado em todo acesso a recurso; imagens são validadas por magic bytes e re-codificadas para WebP; nada de SVG; rate limit em todo endpoint que escreve.
+
+## Painéis "Local" (Claude Code do usuário)
+
+Os 3 terminais decorativos têm a aba **Local** (`LocalPane` em `fake.js`): o painel mostra um comando de uma linha (`curl -k` de `/bridge.mjs` + conferência do SHA-256 calculado no navegador + `node`); o usuário o roda na própria máquina (precisa de Node 24 e do `claude`), cola o código `porta.token` no painel e conversa com o `claude` dele, **com permissão total** (`bypassPermissions`, decisão do projeto) na pasta onde a ponte foi iniciada. O navegador fala direto com `http://127.0.0.1:porta`; o servidor do chat não participa nem vê o conteúdo. A ponte só aceita o `Origin` do chat, exige o token e confere o `Host`; o prompt vai pelo stdin. A CSP ganhou `http://127.0.0.1:*` em `connect-src` só por isso. Safari bloqueia esse acesso (mixed content). `/bridge.mjs` é público de propósito (sem segredo; a integridade vem do hash). Testes: `test/bridge.mjs` (usa `test/fake-claude.mjs`).
 
 ## Armadilhas conhecidas
 

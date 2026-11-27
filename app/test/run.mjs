@@ -38,6 +38,12 @@ try {
     const t = spawn(process.execPath, ['test/smoke.mjs'], { env: { ...env, BASE: `http://127.0.0.1:${port}` }, stdio: 'inherit' });
     t.on('exit', (c) => resolve(c ?? 1));
   });
+  if (code === 0) {
+    code = await new Promise((resolve) => {
+      const t = spawn(process.execPath, ['test/bridge.mjs'], { stdio: 'inherit' });
+      t.on('exit', (c) => resolve(c ?? 1));
+    });
+  }
 } finally {
   server.kill();
   await rm(dir, { recursive: true, force: true });

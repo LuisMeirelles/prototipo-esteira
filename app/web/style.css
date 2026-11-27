@@ -95,6 +95,10 @@ a { color: var(--blue); }
 .prompt { margin-top: 6px; display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .prompt .chev { color: var(--dim); margin-right: 1ch; }
 .prompt .ph, .prompt .enter { color: var(--dim); }
+.prompt.real { display: flex; align-items: center; }
+.real-input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; padding: 0; color: var(--bright); font: inherit; caret-color: var(--text); }
+.real-input::placeholder { color: var(--dim); }
+.err { color: var(--red); }
 .cursor { display: inline-block; width: 0.6em; height: 1.1em; vertical-align: text-bottom; background: var(--text); animation: blink 1.06s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
