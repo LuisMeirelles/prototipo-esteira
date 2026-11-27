@@ -238,7 +238,23 @@ function buildMsg(m, prev) {
       for (const img of m.images) box.append(imageEl(img));
       row.append(box);
     }
+    if (m.reactions.length) {
+      const box = h('div', 'reactions');
+      for (const r of m.reactions) {
+        const mine = r.userIds.includes(state.me.id);
+        const chip = h('button', mine ? 'chip mine' : 'chip');
+        chip.type = 'button';
+        chip.title = r.userIds.map((id) => userOf(id).name).join(', ');
+        chip.append(h('span', null, r.emoji), h('span', 'n', String(r.userIds.length)));
+        chip.addEventListener('click', () => toggleReact(m, r.emoji, !mine));
+        box.append(chip);
+      }
+      row.append(box);
+    }
     const acts = h('div', 'acts');
+    const reactBtn = actBtn('☺', 'reagir', () => openReactPicker(reactBtn, m));
+    reactBtn.dataset.pickerAnchor = '';
+    acts.append(reactBtn);
     acts.append(actBtn('↩', 'responder', () => setReply(m)));
     acts.append(actBtn(pinIcon(), state.pinIds.has(m.id) ? 'desafixar' : 'fixar', () => togglePin(m)));
     if (m.userId === state.me.id) acts.append(actBtn('✎', 'editar', () => startEdit(m, wrap)));
@@ -252,6 +268,75 @@ function buildMsg(m, prev) {
   return wrap;
 }
 
+/* ---------- reações ---------- */
+
+async function toggleReact(m, emoji, on) {
+  try {
+    await api(on ? 'PUT' : 'DELETE', `/api/messages/${m.id}/reactions`, { emoji });
+  } catch (e) {
+    toast(e);
+  }
+}
+
+// o servidor só aceita um grafema Unicode pictográfico; a lista de emojis.js é a única fonte do seletor
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '🙏'];
+const reactPicker = h('div', 'react-picker');
+reactPicker.hidden = true;
+document.body.append(reactPicker);
+
+function closeReactPicker() {
+  if (reactPicker.hidden) return;
+  reactPicker.hidden = true;
+  reactPicker.replaceChildren();
+  // o ponteiro pode ter saído do chat enquanto o seletor estava aberto (a camuflagem ficou suspensa)
+  if (camoOn && !chatPane.matches(':hover')) cover(true);
+}
+
+function openReactPicker(anchor, m) {
+  if (!reactPicker.hidden && reactPicker.dataset.for === String(m.id)) return closeReactPicker();
+  reactPicker.dataset.for = String(m.id);
+  const pick = (emoji) => {
+    closeReactPicker();
+    const mine = m.reactions.find((r) => r.emoji === emoji)?.userIds.includes(state.me.id);
+    toggleReact(m, emoji, !mine);
+  };
+  const emojiBtn = (char, title) => {
+    const b = h('button', null, char);
+    b.type = 'button';
+    b.title = title ?? '';
+    b.addEventListener('click', () => pick(char));
+    return b;
+  };
+  const quick = h('div', 'rp-row');
+  for (const e of QUICK_REACTIONS) quick.append(emojiBtn(e));
+  const search = h('input', 'rp-search');
+  search.type = 'text';
+  search.placeholder = 'buscar emoji…';
+  search.maxLength = 30;
+  search.autocomplete = 'off';
+  const results = h('div', 'rp-grid');
+  const fill = () => {
+    results.replaceChildren(...searchEmojis(search.value).slice(0, 60).map((e) => emojiBtn(e.char, `:${e.name}:`)));
+  };
+  search.addEventListener('input', fill);
+  search.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeReactPicker();
+    if (e.key === 'Enter') results.firstChild?.click();
+  });
+  fill();
+  reactPicker.replaceChildren(quick, search, results);
+  reactPicker.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  const w = reactPicker.offsetWidth;
+  const ph = reactPicker.offsetHeight;
+  reactPicker.style.left = `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8))}px`;
+  reactPicker.style.top = `${Math.max(8, r.bottom + 4 + ph < innerHeight ? r.bottom + 4 : r.top - ph - 4)}px`;
+  search.focus();
+}
+document.addEventListener('mousedown', (e) => {
+  if (!reactPicker.hidden && !reactPicker.contains(e.target) && !e.target.closest('[data-picker-anchor]')) closeReactPicker();
+});
+
 function rebuild(id) {
   const i = state.messages.findIndex((x) => x.id === id);
   const old = state.els.get(id);
@@ -263,6 +348,7 @@ function rebuild(id) {
 
 const scroller = $('scroller');
 const list = $('messages');
+scroller.addEventListener('scroll', closeReactPicker, { passive: true });
 const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 60;
 const toBottom = () => {
   scroller.scrollTop = scroller.scrollHeight;
@@ -716,7 +802,15 @@ function onWsMessage(ev) {
       );
       renderTyping();
       break;
-    // 'presence' e 'react' continuam existindo no servidor, mas esta interface não os usa
+    case 'react': {
+      const m = state.messages.find((x) => x.id === e.id);
+      if (m && !m.deleted) {
+        m.reactions = e.reactions;
+        rebuild(m.id);
+      }
+      break;
+    }
+    // 'presence' continua existindo no servidor, mas esta interface não o usa
   }
 }
 
@@ -833,6 +927,7 @@ async function logout() {
 $('lightbox').addEventListener('click', () => ($('lightbox').hidden = true));
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  closeReactPicker();
   $('lightbox').hidden = true;
   modal.hidden = true;
 });
@@ -1131,12 +1226,13 @@ function toggleCamo() {
 chatPane.addEventListener('pointerenter', (e) => {
   if (e.pointerType === 'mouse') cover(false);
 });
+// com o seletor de reação aberto (fica fora do #chat-pane) a camuflagem não entra; closeReactPicker reavalia
 chatPane.addEventListener('pointerleave', (e) => {
-  if (camoOn && e.pointerType === 'mouse') cover(true);
+  if (camoOn && e.pointerType === 'mouse' && reactPicker.hidden) cover(true);
 });
 // mouse saiu da janela do navegador
 document.documentElement.addEventListener('mouseleave', () => {
-  if (camoOn) cover(true);
+  if (camoOn && reactPicker.hidden) cover(true);
 });
 
 /* ---------- enquete ---------- */

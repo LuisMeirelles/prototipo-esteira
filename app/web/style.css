@@ -147,6 +147,17 @@ a { color: var(--blue); }
 .act { background: none; border: 0; color: var(--dim); cursor: pointer; padding: 0 4px; }
 .act:hover { color: var(--bright); }
 
+.msg .reactions { margin-left: 2ch; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.chip { display: inline-flex; gap: 6px; align-items: center; background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; color: var(--dim); font: inherit; font-size: 12px; padding: 0 6px; cursor: pointer; }
+.chip:hover { border-color: var(--dim); }
+.chip.mine { border-color: var(--blue); color: var(--blue); }
+.react-picker { position: fixed; z-index: 40; width: 280px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); }
+.react-picker button { background: none; border: 0; border-radius: 4px; cursor: pointer; font-size: 18px; width: 36px; height: 32px; padding: 0; }
+.react-picker button:hover { background: var(--sel); }
+.rp-row { display: flex; gap: 2px; padding-bottom: 6px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.rp-search { width: 100%; background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; color: var(--text); font: inherit; padding: 2px 8px; outline: 0; margin-bottom: 6px; }
+.rp-grid { display: flex; flex-wrap: wrap; max-height: 170px; overflow-y: auto; }
+
 .edit-box textarea { width: 100%; min-height: 54px; resize: vertical; background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; color: var(--text); padding: 4px 8px; outline: 0; }
 .edit-box textarea:focus { border-color: var(--blue); }
 .edit-row { display: flex; gap: 12px; justify-content: flex-end; font-size: 12px; margin-top: 2px; }
