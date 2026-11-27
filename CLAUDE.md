@@ -11,7 +11,7 @@ Node 24 + Fastify 5 + `@fastify/websocket` + SQLite (`node:sqlite`, sem ORM) · 
 ```
 app/server/   API, WebSocket, auth, banco (TypeScript rodado direto pelo Node)
 app/web/      index.html, app.js, md.js, emojis.js, fake.js (terminais decorativos e camuflagem), style.css, bridge.mjs (ponte local, baixada pelos usuários), vendor/ (xterm.js copiado e remendado)
-app/test/     smoke.mjs (integração), bridge.mjs + fake-claude.mjs (ponte, com pty de verdade) e run.mjs (sobe servidor descartável e roda os dois)
+app/test/     smoke.mjs (integração), bridge.mjs + fake-claude.mjs (ponte, com pty de verdade), browser.mjs (aba Local no Chrome headless, `npm run test:browser`) e run.mjs (sobe servidor descartável e roda os dois)
 app/build.mjs build de produção (dist/server.mjs, dist/cli.mjs, dist/web/ com hash)
 dev/          compose de desenvolvimento (bind mount, node --watch)
 prod/         compose de produção (build multi-stage, container endurecido, Caddyfile)
@@ -28,6 +28,7 @@ Dentro de `app/`:
 |---|---|
 | `npm run check` | Typecheck (`tsc --noEmit`) |
 | `npm test` | Integração completa com servidor descartável (porta e banco temporários) e testes da ponte (`test/bridge.mjs`, precisa de `python3`) |
+| `npm run test:browser` | Aba Local no Chrome headless (xterm sob a CSP, pontes compartilhada/própria, reload); precisa de Chrome/Chromium e não faz parte do `npm test` |
 | `npm run build` | Build de produção em `dist/` |
 | `npm run dev` | Servidor local com `--watch` (precisa de `INVITE_CODE` e `PUBLIC_ORIGIN` no ambiente) |
 

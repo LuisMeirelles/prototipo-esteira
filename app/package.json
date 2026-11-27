@@ -11,7 +11,8 @@
     "build": "node build.mjs",
     "start": "node --disable-warning=ExperimentalWarning dist/server.mjs",
     "check": "tsc --noEmit",
-    "test": "node test/run.mjs"
+    "test": "node test/run.mjs",
+    "test:browser": "node test/browser.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.5",
