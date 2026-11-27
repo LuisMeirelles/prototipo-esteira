@@ -5,14 +5,16 @@ let prompt = '';
 process.stdin.setEncoding('utf8');
 for await (const c of process.stdin) prompt += c;
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
-if (prompt === 'dorme') {
-  process.on('SIGTERM', () => {
-    writeFileSync(process.env.MARK_FILE, 'morto');
-    process.exit(143);
-  });
+if (prompt.trim() === 'dorme') {
+  for (const sig of ['SIGTERM', 'SIGHUP']) {
+    process.on(sig, () => {
+      writeFileSync(process.env.MARK_FILE, 'morto');
+      process.exit(143);
+    });
+  }
   out({ type: 'system', subtype: 'init' });
   setTimeout(() => {}, 30000);
-} else if (prompt === 'falha') {
+} else if (prompt.trim() === 'falha') {
   console.error('boom');
   process.exit(2);
 } else {

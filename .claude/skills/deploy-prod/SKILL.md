@@ -21,7 +21,7 @@ Reiniciar derruba as conexões WebSocket de quem está online (os clientes recon
    docker compose --env-file ../.env exec -T app node -e "fetch('http://127.0.0.1:3000/').then(r=>console.log(r.status))"
    ```
    O `app` deve aparecer `(healthy)` e responder 200. Procure erros nos logs (`"level":50`).
-4. Relate o resultado. Se o frontend mudou, as páginas abertas recarregam sozinhas (aviso de versão pelo WebSocket); quem tiver rascunho vê a faixa "nova versão disponível". Ctrl+F5 só é preciso para quem estava com uma página anterior ao `hello`.
+4. Relate o resultado. Se o frontend mudou, as páginas abertas não recarregam: aparece a faixa "nova versão disponível" (aviso de versão pelo WebSocket) e cada pessoa recarrega quando quiser. Ctrl+F5 só é preciso para quem estava com uma página anterior ao `hello`.
 
 ## Se algo der errado
 

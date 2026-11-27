@@ -650,10 +650,9 @@ function onServerVersion(v) {
     return;
   }
   if (v === state.version) return;
-  // ocioso (nada digitado, sem anexo, sem janela aberta): recarrega sozinho; senão avisa sem perder o rascunho
-  const busy = input.value.trim() || state.pending.length || !modal.hidden || !pollModal.hidden;
-  if (busy) $('update-bar').hidden = false;
-  else location.reload();
+  // nunca recarrega sozinho: o painel Local, rascunhos e a leitura em andamento não podem ser interrompidos
+  // por um deploy. Só avisa; a pessoa recarrega quando quiser.
+  $('update-bar').hidden = false;
 }
 $('update-reload').addEventListener('click', () => location.reload());
 

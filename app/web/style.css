@@ -1,4 +1,5 @@
 /* Tema de terminal (escuro) inspirado em sessões de agente de código no terminal do IDE. */
+@import './vendor/xterm.css';
 :root {
   --bg: #1e1f22;
   --bg2: #2b2d30;
@@ -87,7 +88,6 @@ a { color: var(--blue); }
 .think[hidden] { display: block !important; visibility: hidden; }
 .think .spin, .think .verb { color: var(--orange); }
 .status { color: var(--dim); min-height: 1.55em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sugg { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 1ch; }
 .gap { height: 0.8em; }
 .foot { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .foot .ctx { color: var(--green); }
@@ -270,3 +270,8 @@ a { color: var(--blue); }
   .hint { font-size: 10px; }
   .tab .title { max-width: 18ch; }
 }
+
+/* aba TTY do painel Local (xterm.js) */
+.tty-box { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 6px 10px 8px; }
+.tty-host { flex: 1; min-height: 0; overflow: hidden; }
+.tty-msg { color: var(--dim); padding: 8px 6px; }
