@@ -383,44 +383,46 @@ class FakePane {
 }
 
 /* ---------- sessão local (Claude Code CLI da própria pessoa) ---------- */
-// Fala com a ponte `bridge/bridge.mjs`, que a pessoa roda na máquina dela. O código
-// (porta.token) fica só em memória: recarregar a página pede de novo.
-
-const bridge = { base: null, token: null, cwd: null };
+// Fala com a ponte `web/bridge.mjs`, que a pessoa roda na máquina dela. Por padrão há UMA ponte
+// compartilhada por todos os painéis Local (abre-se uma vez e todos conectam); um painel pode ter a sua,
+// própria, para rodar o claude em outra pasta.
 const CODE_RE = /^(\d{1,5})\.([A-Za-z0-9_-]{20,64})$/;
+const SHARED_KEY = 'local-bridge';
+const ownKey = (cfg) => `local-bridge-own:${cfg.initialTitle}`;
 
-// Um deploy recarrega a página, e sem isso o código da ponte (e a conversa do claude) se perderia a cada
-// versão nova. sessionStorage vive só naquela aba e some ao fechá-la; o token já estava ao alcance de
-// qualquer script da página, então guardá-lo aqui não amplia o que um XSS alcançaria.
-const BRIDGE_KEY = 'local-bridge';
-function saveBridge() {
+// Um deploy ou recarregamento da página não pode perder o código da ponte. sessionStorage vive só naquela
+// aba e some ao fechá-la; o token já estava ao alcance de qualquer script da página, então guardá-lo aqui
+// não amplia o que um XSS alcançaria.
+function saveBridge(b, key) {
   try {
-    sessionStorage.setItem(BRIDGE_KEY, JSON.stringify({ code: `${new URL(bridge.base).port}.${bridge.token}`, cwd: bridge.cwd }));
+    sessionStorage.setItem(key, JSON.stringify({ code: `${new URL(b.base).port}.${b.token}`, cwd: b.cwd }));
   } catch {
     // sem storage: a pessoa só precisará colar o código de novo depois de recarregar
   }
 }
-function forgetBridge() {
-  bridge.base = bridge.token = null;
+function forgetBridge(b, key) {
+  b.base = b.token = null;
   try {
-    sessionStorage.removeItem(BRIDGE_KEY);
+    sessionStorage.removeItem(key);
   } catch {
     // ignora
   }
 }
-try {
-  const saved = JSON.parse(sessionStorage.getItem(BRIDGE_KEY) ?? 'null');
-  const m = typeof saved?.code === 'string' ? CODE_RE.exec(saved.code) : null;
-  if (m) {
-    bridge.base = `http://127.0.0.1:${m[1]}`;
-    bridge.token = m[2];
-    bridge.cwd = typeof saved.cwd === 'string' ? saved.cwd : '';
+function loadBridge(key) {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(key) ?? 'null');
+    const m = typeof saved?.code === 'string' ? CODE_RE.exec(saved.code) : null;
+    if (m) return { base: `http://127.0.0.1:${m[1]}`, token: m[2], cwd: typeof saved.cwd === 'string' ? saved.cwd : '' };
+  } catch {
+    // storage indisponível ou conteúdo inválido: começa desconectado
   }
-} catch {
-  // storage indisponível ou conteúdo inválido: começa desconectado
+  return null;
 }
+let shared = loadBridge(SHARED_KEY) ?? { base: null, token: null, cwd: null };
+// painéis Local abertos: quando uma ponte compartilhada é conectada, os que estavam esperando entram nela
+const localPanes = new Set();
 
-async function connectBridge(code) {
+async function connectBridge(code, b, key) {
   const m = CODE_RE.exec(code.trim());
   if (!m) throw new Error('Código inválido. O formato é porta.token, como mostrado pela ponte.');
   const base = `http://127.0.0.1:${m[1]}`;
@@ -434,10 +436,10 @@ async function connectBridge(code) {
   if (res.status === 403) throw new Error('A ponte foi iniciada para outro endereço de chat. Reinicie-a com o endereço mostrado acima.');
   if (!res.ok) throw new Error(`A ponte respondeu com erro (${res.status}).`);
   const info = await res.json().catch(() => ({}));
-  bridge.base = base;
-  bridge.token = m[2];
-  bridge.cwd = typeof info.cwd === 'string' ? info.cwd : '';
-  saveBridge();
+  b.base = base;
+  b.token = m[2];
+  b.cwd = typeof info.cwd === 'string' ? info.cwd : '';
+  saveBridge(b, key);
   return info;
 }
 
@@ -467,10 +469,10 @@ function bridgeCommand() {
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const dirName = (p) => (p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p || 'Local');
 
-async function bridgePost(path, body, signal) {
-  return fetch(`${bridge.base}${path}`, {
+async function bridgePost(b, path, body, signal) {
+  return fetch(`${b.base}${path}`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${bridge.token}`, 'content-type': 'application/json' },
+    headers: { authorization: `Bearer ${b.token}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
     signal,
   });
@@ -483,6 +485,10 @@ class LocalPane {
     this.alive = true;
     this.busy = false;
     this.root = root;
+    this.key = ownKey(cfg);
+    this.b = null; // ponte em uso: a compartilhada ou a própria deste painel
+    this.own = false;
+    this.wantOwn = false;
 
     const tabs = h('div', 'tabs');
     const back = h('span', 'tab', cfg.initialTitle);
@@ -499,7 +505,19 @@ class LocalPane {
     const loc = h('span', 'tab active');
     this.titleEl = h('span', 'title', 'Local');
     loc.append(h('span', 'star', '✳'), this.titleEl);
-    tabs.append(h('span', 'tab dim', 'Terminal'), back, loc, h('span', 'plus', '＋'));
+    // troca a ponte deste painel (encerra o claude em andamento)
+    const swap = h('span', 'tab dim', 'ponte…');
+    swap.setAttribute('role', 'button');
+    swap.tabIndex = 0;
+    swap.title = 'Trocar a ponte deste painel (encerra o claude em andamento)';
+    swap.addEventListener('click', () => this.askCode());
+    swap.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        this.askCode();
+      }
+    });
+    tabs.append(h('span', 'tab dim', 'Terminal'), back, loc, swap, h('span', 'plus', '＋'));
     this.tabsEl = tabs;
 
     this.out = h('div', 'out scroll');
@@ -525,12 +543,21 @@ class LocalPane {
       }
     });
 
-    if (bridge.base) this.resume();
-    else this.askCode();
+    localPanes.add(this);
+    const mine = loadBridge(this.key);
+    if (mine) {
+      this.b = mine;
+      this.own = true;
+      this.resume();
+    } else if (shared.base) {
+      this.b = shared;
+      this.resume();
+    } else this.askCode();
   }
 
   stop() {
     this.alive = false;
+    localPanes.delete(this);
     this.closeTty();
   }
 
@@ -547,12 +574,13 @@ class LocalPane {
 
   // a aba leva o nome da pasta em que a ponte foi iniciada; sem conexão volta a ser "Local"
   setTitle(connected) {
-    const name = connected && bridge.cwd ? clip(dirName(bridge.cwd), 24) : 'Local';
-    this.titleEl.textContent = name;
-    this.titleEl.title = connected && bridge.cwd ? bridge.cwd : '';
+    const cwd = connected ? this.b?.cwd : '';
+    this.titleEl.textContent = cwd ? clip(dirName(cwd), 24) : 'Local';
+    this.titleEl.title = cwd ? `${cwd}${this.own ? ' · ponte só deste painel' : ' · ponte compartilhada'}` : '';
   }
 
   askCode() {
+    this.mode = 'code';
     this.closeTty();
     this.setTitle(false);
     this.root.replaceChildren(this.tabsEl, this.out, this.dock);
@@ -582,6 +610,23 @@ class LocalPane {
       },
     );
     this.note('2. Cole abaixo o código mostrado (porta.token) e tecle Enter.');
+    this.wantOwn = this.own;
+    const scope = this.line('indent');
+    const label = h('span', 'dim');
+    const toggle = h('button', 'link');
+    toggle.type = 'button';
+    const paint = () => {
+      label.textContent = this.wantOwn ? 'Esta ponte vale só para este painel (outra pasta). ' : 'Esta ponte vale para todos os painéis. ';
+      toggle.textContent = this.wantOwn ? '[usar para todos]' : '[usar só neste painel]';
+    };
+    toggle.addEventListener('click', () => {
+      this.wantOwn = !this.wantOwn;
+      paint();
+      this.input.focus();
+    });
+    paint();
+    scope.append(label, toggle);
+    this.note('Para rodar o claude em pastas diferentes, abra uma ponte em cada pasta e use "só neste painel".', 'dim indent');
     this.note('Funciona em Linux e macOS, com Chrome ou Firefox.', 'dim');
     this.input.focus();
   }
@@ -589,7 +634,26 @@ class LocalPane {
   async tryConnect(code) {
     this.busy = true;
     try {
-      await connectBridge(code);
+      if (this.wantOwn) {
+        const mine = { base: null, token: null, cwd: null };
+        await connectBridge(code, mine, this.key);
+        this.b = mine;
+        this.own = true;
+      } else {
+        // objeto novo: painéis que já usam a compartilhada anterior continuam nela, sem ficar com o terminal morto
+        const fresh = { base: null, token: null, cwd: null };
+        await connectBridge(code, fresh, SHARED_KEY);
+        shared = fresh;
+        this.b = shared;
+        this.own = false;
+        try {
+          sessionStorage.removeItem(this.key); // volta a usar a compartilhada
+        } catch {
+          // ignora
+        }
+        // os outros painéis que esperavam por uma ponte (e não pediram a própria) entram nesta
+        for (const pane of localPanes) if (pane !== this && pane.mode === 'code' && !pane.wantOwn) pane.useShared();
+      }
       if (this.alive) this.openTty();
     } catch (err) {
       if (this.alive) this.note(err.message, 'err');
@@ -604,14 +668,22 @@ class LocalPane {
     this.root.replaceChildren(this.tabsEl, this.ttyBox);
     this.ttyMessage('reconectando…');
     try {
-      await connectBridge(`${new URL(bridge.base).port}.${bridge.token}`);
+      await connectBridge(`${new URL(this.b.base).port}.${this.b.token}`, this.b, this.own ? this.key : SHARED_KEY);
       if (this.alive) this.openTty();
     } catch (err) {
-      forgetBridge();
+      forgetBridge(this.b, this.own ? this.key : SHARED_KEY);
+      this.own = false;
       if (!this.alive) return;
       this.askCode();
       this.note(`A ponte anterior não respondeu: ${err.message}`, 'err');
     }
+  }
+
+  useShared() {
+    if (!this.alive || !shared.base) return;
+    this.b = shared;
+    this.own = false;
+    this.openTty();
   }
 
   ttyMessage(text) {
@@ -619,6 +691,7 @@ class LocalPane {
   }
 
   async openTty() {
+    this.mode = 'tty';
     this.setTitle(true);
     this.root.replaceChildren(this.tabsEl, this.ttyBox);
     this.ttyMessage('abrindo o terminal…');
@@ -666,11 +739,13 @@ class LocalPane {
         return;
       }
       const id = this.ttyId;
-      if (id) this.ttyQ = this.ttyQ.then(() => bridgePost('/tty/input', { id, data }).catch(() => {}));
+      const b = this.ttyBridge;
+      if (id) this.ttyQ = this.ttyQ.then(() => bridgePost(b, '/tty/input', { id, data }).catch(() => {}));
     });
     term.onResize(({ cols, rows }) => {
       const id = this.ttyId;
-      if (id) bridgePost('/tty/resize', { id, cols, rows }).catch(() => {});
+      const b = this.ttyBridge;
+      if (id) bridgePost(b, '/tty/resize', { id, cols, rows }).catch(() => {});
     });
     let raf = 0;
     this.ttyObs = new ResizeObserver(() => {
@@ -686,11 +761,12 @@ class LocalPane {
 
   async startTty() {
     const term = this.term;
+    this.ttyBridge = this.b;
     this.ttyDead = false;
     this.ttyCtrl = new AbortController();
     const ctrl = this.ttyCtrl;
     try {
-      const res = await bridgePost('/tty/start', { cols: term.cols, rows: term.rows }, ctrl.signal);
+      const res = await bridgePost(this.ttyBridge, '/tty/start', { cols: term.cols, rows: term.rows }, ctrl.signal);
       if (res.status === 429) throw new Error('A ponte já tem 2 terminais abertos.');
       if (!res.ok) throw new Error(`A ponte respondeu com erro (${res.status}).`);
       const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -742,11 +818,12 @@ class LocalPane {
 
   closeTty() {
     const id = this.ttyId;
+    const b = this.ttyBridge;
     this.ttyCtrl?.abort(); // fechar o stream faz a ponte encerrar o claude
     this.ttyObs?.disconnect();
     this.term?.dispose();
     this.term = this.fit = this.ttyId = this.ttyCtrl = null;
-    if (id && bridge.base) bridgePost('/tty/stop', { id }).catch(() => {});
+    if (id && b?.base) bridgePost(b, '/tty/stop', { id }).catch(() => {});
   }
 }
 
@@ -807,7 +884,7 @@ export function startFakePanes(roots) {
     openLocal(i);
   };
   roots.forEach((_, i) => {
-    if (wasLocal(i) && bridge.base) openLocal(i);
+    if (wasLocal(i)) openLocal(i);
     else fake(i, order.slice(i * 2).concat(order.slice(0, i * 2)), i * 1200); // começam defasados
   });
   return () => cur.forEach((p) => p.stop());
