@@ -10,8 +10,8 @@ Node 24 + Fastify 5 + `@fastify/websocket` + SQLite (`node:sqlite`, sem ORM) · 
 
 ```
 app/server/   API, WebSocket, auth, banco (TypeScript rodado direto pelo Node)
-app/web/      index.html, app.js, md.js, emojis.js, fake.js (terminais decorativos e camuflagem), style.css, bridge.mjs (ponte local, baixada pelos usuários)
-app/test/     smoke.mjs (integração) e run.mjs (sobe servidor descartável)
+app/web/      index.html, app.js, md.js, emojis.js, fake.js (terminais decorativos e camuflagem), style.css, bridge.mjs (ponte local, baixada pelos usuários), vendor/ (xterm.js copiado e remendado)
+app/test/     smoke.mjs (integração), bridge.mjs + fake-claude.mjs (ponte, com pty de verdade) e run.mjs (sobe servidor descartável e roda os dois)
 app/build.mjs build de produção (dist/server.mjs, dist/cli.mjs, dist/web/ com hash)
 dev/          compose de desenvolvimento (bind mount, node --watch)
 prod/         compose de produção (build multi-stage, container endurecido, Caddyfile)
@@ -27,7 +27,7 @@ Dentro de `app/`:
 | Comando | O que faz |
 |---|---|
 | `npm run check` | Typecheck (`tsc --noEmit`) |
-| `npm test` | Integração completa com servidor descartável (porta e banco temporários) |
+| `npm test` | Integração completa com servidor descartável (porta e banco temporários) e testes da ponte (`test/bridge.mjs`, precisa de `python3`) |
 | `npm run build` | Build de produção em `dist/` |
 | `npm run dev` | Servidor local com `--watch` (precisa de `INVITE_CODE` e `PUBLIC_ORIGIN` no ambiente) |
 
@@ -63,6 +63,8 @@ Os 3 terminais decorativos têm a aba **Local** (`LocalPane` em `fake.js`), que 
 - `.env` contém segredos: não leia, imprima nem comite.
 - O healthcheck da imagem de produção consulta `GET /`. Se mudar a rota raiz, ajuste `prod/Dockerfile`.
 - Reiniciar produção derruba as conexões WebSocket (o cliente reconecta, recarrega o histórico e, se a versão do frontend mudou, mostra a faixa de nova versão; a página nunca recarrega sozinha). Páginas abertas antes de existir o `hello` precisam de Ctrl+F5 uma vez.
+- Mudou `app/web/bridge.mjs`? Quem já a baixou continua com a versão antiga (sem as rotas novas) até rodar o comando do painel de novo; avise. O comando do painel guarda o hash em cache até a página recarregar, então logo depois de um deploy que mude a ponte ele pode falhar na conferência (falha segura; recarregar resolve).
+- O `xterm.mjs` em `web/vendor/` tem patch (ver seção Painéis "Local"): não substitua pelo original sem refazê-lo, senão o terminal quebra sob a CSP.
 - Não há gerenciamento de usuários na UI: admin é por CLI (`/admin-users`). A primeira conta criada vira admin.
 
 ## Como trabalhar aqui

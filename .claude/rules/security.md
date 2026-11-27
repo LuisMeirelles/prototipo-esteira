@@ -28,6 +28,12 @@ O modelo de ameaça é um colega da mesma rede tentando invadir. Qualquer altera
 - Imagens: magic bytes + re-encode WebP com `sharp` (remove EXIF e payload). Nunca confiar em `Content-Type`/extensão. Sem SVG. Limite de 6 MB e de pixels. Nome do arquivo gerado no servidor.
 - SQL sempre com `?`; nunca concatene valor de usuário em SQL (listas de `IN` usam placeholders gerados, ver `ph()` em `store.ts`).
 
+## Ponte local (`app/web/bridge.mjs`, roda na máquina do usuário)
+- Só existem `GET /health` e `POST /tty/start|input|resize|stop`. **Não adicione** rota que execute comando escolhido pelo navegador, leia arquivo ou liste pasta (já houve `/shell`, `/chat`, `/complete` e leitura de conversas; foram removidas de propósito). O programa executado é fixo (`claude`), sem shell.
+- Toda requisição exige `Origin` exato, `Host` de loopback e token (`timingSafeEqual`); entradas numéricas e tamanhos são validados; no máximo 3 terminais.
+- `/bridge.mjs` é público de propósito e o chat é a raiz de confiança dela (quem controla o servidor controla o arquivo que os usuários rodam). Não deixe esse arquivo em caminho gravável pelo app em produção.
+- O token fica no `sessionStorage`, então um XSS no chat vira terminal na máquina do usuário: as regras de saída abaixo valem em dobro. Não carregue addons do xterm (clipboard, links) sem revisar.
+
 ## Saída (frontend)
 - Dado de usuário vai por `textContent`/`createElement`/`renderMarkdown` (que só cria nós DOM). Proibido `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `eval`, `new Function`, `setAttribute('style'|'on*', ...)`.
 - Links só `http(s)`, com `rel="noopener noreferrer nofollow"`. O Markdown não tem `[texto](url)` de propósito, para o destino do link ser sempre o que aparece escrito.

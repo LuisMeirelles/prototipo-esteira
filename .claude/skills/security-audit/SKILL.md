@@ -34,7 +34,13 @@ Ameaça: usuário da mesma rede tentando invadir, se passar por outro, injetar s
 - Nada de segredo em código, Dockerfile, compose ou logs. `.env` fora do git (`.gitignore`) e do contexto de build (`app/.dockerignore`).
 - `prod/docker-compose.yml`: `read_only`, `cap_drop: ALL`, `no-new-privileges`, usuário não-root na imagem, `app` sem `ports`. Caddy é o único que publica portas.
 
-## 8. Teste dinâmico
+## 8. Ponte local e terminal (aba Local)
+- `app/web/bridge.mjs`: só `GET /health` e `POST /tty/*`; nada de rota que execute comando, leia arquivo ou liste pasta; `spawn` sem shell e com programa fixo; `Origin`, `Host` e token conferidos antes de qualquer rota; tamanhos e números validados (`MAX_BODY`, `MAX_INPUT`, `dim()`); limite de terminais; o `claude` morre quando a conexão fecha.
+- `app/web/vendor/xterm.mjs`: não carregar addons de clipboard/links; o patch `__xtStyle` continua o único desvio do original; a CSP não ganhou `unsafe-inline`.
+- `connect-src` só com `'self'`, `wss://host` e `http://127.0.0.1:*`.
+- `test/bridge.mjs` cobre 401/403/404/400/429 da ponte; confirme que continua passando.
+
+## 9. Teste dinâmico
 Rode `npm test` em `app/` e confirme que os casos de ataque do `test/smoke.mjs` seguem passando. Para controle novo, escreva o caso de ataque primeiro.
 
 ## Entrega
