@@ -18,7 +18,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 
 const CLAUDE = process.env.CLAUDE_BIN || 'claude';
-const MAX_BODY = 64 * 1024;
+// maior que MAX_INPUT com folga: no JSON um caractere de controle ocupa até 6 bytes (\u00XX)
+const MAX_BODY = 256 * 1024;
 const cwd = process.cwd();
 
 function fail(msg) {

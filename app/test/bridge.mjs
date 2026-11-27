@@ -80,13 +80,14 @@ try {
   await pump(() => tid);
   ok(tt.status === 200 && tid.length > 10, 'ponte: /tty/start abre o terminal e devolve o id');
   const tin = (body, headers = good) => post('/tty/input', body, headers);
+  // validações enquanto o terminal ainda está vivo (depois do Ctrl-D o programa de teste termina e o id some)
+  ok((await post('/tty/resize', { id: tid, cols: 120, rows: 40 })).status === 200, 'ponte: /tty/resize aceita tamanho válido');
+  ok((await post('/tty/resize', { id: tid, cols: 5000, rows: 40 })).status === 400, 'ponte: /tty/resize com tamanho absurdo → 400');
+  ok((await tin({ id: tid, data: 'x'.repeat(33000) })).status === 400, 'ponte: /tty/input grande demais → 400');
   ok((await tin({ id: tid, data: 'ola\n' })).status === 200, 'ponte: /tty/input aceita teclas');
   ok((await tin({ id: tid, data: '\x04' })).status === 200, 'ponte: /tty/input aceita Ctrl-D');
   await pump(() => tout.includes('recebi: ola'));
   ok(tout.includes('recebi: ola'), 'ponte: o que se digita chega ao programa e a saída volta (pty real)');
-  ok((await post('/tty/resize', { id: tid, cols: 120, rows: 40 })).status === 200, 'ponte: /tty/resize aceita tamanho válido');
-  ok((await post('/tty/resize', { id: tid, cols: 5000, rows: 40 })).status === 400, 'ponte: /tty/resize com tamanho absurdo → 400');
-  ok((await tin({ id: tid, data: 'x'.repeat(33000) })).status === 400, 'ponte: /tty/input grande demais → 400');
   ok((await tin({ id: 'nao-existe', data: 'a' })).status === 404, 'ponte: /tty/input com id desconhecido → 404');
   ok((await tin({ id: tid, data: 'a' }, { origin: ORIGIN, 'content-type': 'application/json' })).status === 401, 'ponte: /tty/input sem token → 401');
   ok((await tin({ id: tid, data: 'a' }, { ...good, origin: 'https://evil.test' })).status === 403, 'ponte: /tty/input com Origin errado → 403');
@@ -94,6 +95,15 @@ try {
   await post('/tty/stop', { id: tid });
   await pump(() => false, 1500);
   ok((await tin({ id: tid, data: 'a' })).status === 404, 'ponte: /tty/stop encerra e libera o id');
+  // colar texto grande: no JSON um caractere de controle ocupa 6 bytes, então o corpo passa de 64 KB sem passar de 32 mil caracteres
+  const big = await post('/tty/start', {});
+  const bigRd = big.body.pipeThrough(new TextDecoderStream()).getReader();
+  const bigId = JSON.parse((await bigRd.read()).value.split('\n')[0]).id;
+  const paste = (('\x01'.repeat(99) + '\n').repeat(300));
+  ok((await tin({ id: bigId, data: paste })).status === 200, 'ponte: colar ~30 mil caracteres de controle (corpo JSON de ~180 KB) passa');
+  await post('/tty/stop', { id: bigId });
+  bigRd.cancel().catch(() => {});
+  await pump(() => false, 800);
   const many = [];
   for (let i = 0; i < 4; i++) many.push(await post('/tty/start', {}));
   ok(many.map((m) => m.status).join() === '200,200,200,429', 'ponte: no máximo 3 terminais ao mesmo tempo (4º → 429)');
