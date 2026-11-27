@@ -81,6 +81,20 @@ ok((await rawHost(`127.0.0.1:${port}`)) === 200, 'ponte: Host de loopback legít
   ok((await post('/complete', { prefix: 'x'.repeat(1001) })).status === 400, 'ponte: /complete prefixo grande demais → 400');
   ok((await post('/complete', { prefix: 'test/' }, { origin: ORIGIN, 'content-type': 'application/json' })).status === 401, 'ponte: /complete sem token → 401');
 
+  // cd persiste entre comandos e a pasta é informada ao painel (nome da aba)
+  const runSh = async (command) => (await (await post('/shell', { command })).text()).trim().split('\n').map((l) => JSON.parse(l));
+  const cdOut = await runSh('cd test && echo dentro');
+  ok(cdOut.at(-1).cwd === resolve('test'), 'ponte: /shell informa a pasta onde o comando terminou');
+  const hc = await (await fetch(`${base}/health`, { headers: good })).json();
+  ok(hc.cwd === resolve('test'), 'ponte: o cd vale para os próximos comandos (health)');
+  const pw = await runSh('pwd');
+  ok(pw.some((l) => l.data?.trim() === resolve('test')), 'ponte: comando seguinte roda na pasta nova');
+  ok((await (await post('/complete', { prefix: 'fake-c' })).json()).items.includes('fake-claude.mjs'), 'ponte: Tab completa a partir da pasta nova');
+  const bad = await runSh('cd /nao/existe');
+  ok(bad.at(-1).cwd === resolve('test'), 'ponte: cd para pasta inexistente não muda a pasta');
+  const up = await runSh('cd .. # comentário no fim');
+  ok(up.at(-1).cwd === resolve('.'), 'ponte: comentário no fim do comando não quebra o rastreio da pasta');
+
   const ctrl = new AbortController();
   const s = await fetch(`${base}/chat`, { method: 'POST', headers: good, body: JSON.stringify({ prompt: 'dorme' }), signal: ctrl.signal });
   await s.body.getReader().read();

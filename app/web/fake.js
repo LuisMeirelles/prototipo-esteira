@@ -432,6 +432,15 @@ function bridgeCommand() {
   return bridgeCmd;
 }
 
+// painéis Local abertos: todos dividem a mesma ponte, então a pasta (e o nome da aba) muda para todos
+const localPanes = new Set();
+const dirName = (p) => (p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p || 'Local');
+function setBridgeCwd(next) {
+  if (typeof next !== 'string' || !next || next === bridge.cwd) return;
+  bridge.cwd = next;
+  for (const pane of localPanes) pane.cwdChanged();
+}
+
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 function toolArg(input) {
@@ -496,7 +505,8 @@ class LocalPane {
       }
     });
     const loc = h('span', 'tab active');
-    loc.append(h('span', 'star', '✳'), h('span', 'title', 'Local'));
+    this.titleEl = h('span', 'title', 'Local');
+    loc.append(h('span', 'star', '✳'), this.titleEl);
     tabs.append(h('span', 'tab dim', 'Terminal'), back, loc, h('span', 'plus', '＋'));
 
     this.out = h('div', 'out scroll');
@@ -526,6 +536,7 @@ class LocalPane {
     this.input.addEventListener('input', () => this.showSugg([]));
     this.tick = setInterval(() => this.animate(), 130);
 
+    localPanes.add(this);
     if (bridge.base) this.ready();
     else this.askCode();
     this.input.focus();
@@ -533,6 +544,7 @@ class LocalPane {
 
   stop() {
     this.alive = false;
+    localPanes.delete(this);
     clearInterval(this.tick);
     this.ctrl?.abort();
   }
@@ -558,8 +570,24 @@ class LocalPane {
     this.line(cls).textContent = text;
   }
 
+  // a aba mostra a pasta atual da ponte; sem conexão volta a ser "Local"
+  setTitle() {
+    const name = this.mode === 'chat' && bridge.cwd ? clip(dirName(bridge.cwd), 24) : 'Local';
+    this.titleEl.textContent = name;
+    this.titleEl.title = this.mode === 'chat' && bridge.cwd ? bridge.cwd : '';
+  }
+
+  // o claude guarda as sessões por pasta: depois de um `cd`, retomar a anterior falharia
+  cwdChanged() {
+    if (!this.alive || this.mode !== 'chat') return;
+    this.setTitle();
+    this.session = null;
+    this.note(`Pasta agora: ${bridge.cwd} · próxima pergunta abre uma conversa nova`, 'dim indent');
+  }
+
   askCode() {
     this.mode = 'code';
+    this.setTitle();
     this.input.type = 'password';
     this.input.placeholder = 'cole o código da ponte ↵';
     this.out.replaceChildren();
@@ -593,6 +621,7 @@ class LocalPane {
 
   ready() {
     this.mode = 'chat';
+    this.setTitle();
     this.input.type = 'text';
     this.input.placeholder = 'pergunte algo ou descreva uma tarefa ↵';
     this.out.replaceChildren();
@@ -746,8 +775,9 @@ class LocalPane {
           for (const ln of ev.data.replace(/\r/g, '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split('\n')) {
             if (ln !== '') this.note(clip(ln, 500), ev.stream === 'stderr' ? 'err indent' : 'indent');
           }
-        } else if (ev?.type === 'exit' && ev.code) {
-          this.note(`saiu com código ${Number(ev.code)}`, 'dim indent');
+        } else if (ev?.type === 'exit') {
+          if (ev.code) this.note(`saiu com código ${Number(ev.code)}`, 'dim indent');
+          setBridgeCwd(ev.cwd);
         } else if (ev?.type === 'bridge_error') {
           this.note(clip(String(ev.message ?? 'Erro na ponte.'), 300), 'err');
         }

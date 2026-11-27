@@ -17,6 +17,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
+import { statSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, resolve as resolvePath } from 'node:path';
@@ -25,6 +26,9 @@ const CLAUDE = process.env.CLAUDE_BIN || 'claude';
 const MAX_BODY = 64 * 1024;
 const MAX_PROMPT = 32000;
 const MAX_RUNS = 4; // um por painel, com folga
+// Pasta de trabalho atual: começa onde a ponte foi iniciada e acompanha os `cd` dados no modo `!`.
+// O claude e o shell sempre rodam nela.
+let cwd = process.cwd();
 const MAX_SHELL = 4000;
 const SHELL_TIMEOUT_MS = 120_000;
 const MAX_SHELL_OUT = 1024 * 1024; // depois disso a saída é cortada, para não encher a memória do navegador
@@ -89,7 +93,7 @@ async function complete(res, body, cors) {
   const prefix = body?.prefix;
   if (typeof prefix !== 'string' || prefix.length > 1000) return json(res, 400, { error: 'invalid_body' }, cors);
   const expanded = prefix === '~' || prefix.startsWith('~/') ? homedir() + prefix.slice(1) : prefix;
-  const full = resolvePath(process.cwd(), expanded);
+  const full = resolvePath(cwd, expanded);
   const dir = expanded === '' || expanded.endsWith('/') ? full : dirname(full);
   const base = expanded === '' || expanded.endsWith('/') ? '' : full.slice(dir.length + 1);
   let items = [];
@@ -115,7 +119,14 @@ function shell(res, body, cors) {
   }
   if (running >= MAX_RUNS) return json(res, 429, { error: 'busy' }, cors);
   running++;
-  const child = spawn(process.env.SHELL || '/bin/sh', ['-c', command], { stdio: ['ignore', 'pipe', 'pipe'] });
+  // fd 3 devolve a pasta em que o comando terminou, para que `cd x && ls` (ou só `cd x`) valha para os
+  // próximos comandos e para o claude. Vai depois de uma quebra de linha: comentário no fim não engole.
+  const script = `${command}\n__rc=$?\npwd -P >&3 2>/dev/null\nexit $__rc`;
+  const child = spawn(process.env.SHELL || '/bin/sh', ['-c', script], { stdio: ['ignore', 'pipe', 'pipe', 'pipe'], cwd });
+  let endDir = '';
+  child.stdio[3].on('data', (d) => {
+    endDir = (endDir + d).slice(0, 4096);
+  });
   res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-store', ...cors });
   let sent = 0;
   const emit = (stream) => (d) => {
@@ -137,7 +148,15 @@ function shell(res, body, cors) {
     clearTimeout(timer);
     running--;
     if (message) res.write(JSON.stringify({ type: 'bridge_error', message }) + '\n');
-    else res.write(JSON.stringify({ type: 'exit', code }) + '\n');
+    else {
+      const dir = endDir.trim();
+      try {
+        if (dir && statSync(dir).isDirectory()) cwd = dir;
+      } catch {
+        // pasta sumiu no meio do caminho: mantém a anterior
+      }
+      res.write(JSON.stringify({ type: 'exit', code, cwd }) + '\n');
+    }
     res.end();
   };
   child.on('error', (e) => finish(String(e.message)));
@@ -169,7 +188,7 @@ const server = createServer(async (req, res) => {
 
   const path = (req.url ?? '').split('?')[0];
   if (req.method === 'GET' && path === '/health') {
-    return json(res, 200, { ok: true, cwd: process.cwd() }, cors);
+    return json(res, 200, { ok: true, cwd }, cors);
   }
   if (req.method !== 'POST' || !['/chat', '/shell', '/complete'].includes(path)) {
     return json(res, 404, { error: 'not_found' }, cors);
@@ -197,7 +216,7 @@ const server = createServer(async (req, res) => {
   if (session) cliArgs.push('--resume', session);
 
   running++;
-  const child = spawn(CLAUDE, cliArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(CLAUDE, cliArgs, { stdio: ['pipe', 'pipe', 'pipe'], cwd });
   let stderr = '';
   child.stderr.on('data', (d) => {
     stderr = (stderr + d).slice(-2000);
@@ -225,7 +244,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(wantedPort, '127.0.0.1', () => {
   const { port } = server.address();
-  console.log(`Ponte local ligada em 127.0.0.1:${port} (permissão total, diretório: ${process.cwd()})`);
+  console.log(`Ponte local ligada em 127.0.0.1:${port} (permissão total, diretório: ${cwd})`);
   console.log(`Aceita só o chat em ${origin}.`);
   console.log('');
   console.log(`Código: ${port}.${token}`);
