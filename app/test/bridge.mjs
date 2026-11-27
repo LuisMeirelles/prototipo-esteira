@@ -1,7 +1,7 @@
 // Testa a ponte local (bridge/bridge.mjs) com um `claude` de mentira. Rode com `npm test`.
 import { spawn } from 'node:child_process';
 import { request } from 'node:http';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -12,7 +12,7 @@ const ok = (c, msg) => { console.log(c ? 'PASS' : 'FAIL', msg); if (!c) fails++;
 const dir = mkdtempSync(join(tmpdir(), 'bridge-test-'));
 const mark = join(dir, 'morto');
 const child = spawn(process.execPath, ['web/bridge.mjs', ORIGIN], {
-  env: { ...process.env, CLAUDE_BIN: resolve('test/fake-claude.mjs'), MARK_FILE: mark },
+  env: { ...process.env, CLAUDE_BIN: resolve('test/fake-claude.mjs'), MARK_FILE: mark, CLAUDE_CONFIG_DIR: join(dir, 'cfg') },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
 
@@ -94,6 +94,31 @@ ok((await rawHost(`127.0.0.1:${port}`)) === 200, 'ponte: Host de loopback legít
   ok(bad.at(-1).cwd === resolve('test'), 'ponte: cd para pasta inexistente não muda a pasta');
   const up = await runSh('cd .. # comentário no fim');
   ok(up.at(-1).cwd === resolve('.'), 'ponte: comentário no fim do comando não quebra o rastreio da pasta');
+
+  // histórico: lê os .jsonl do claude (aqui num CLAUDE_CONFIG_DIR de mentira) para /sessions e /transcript
+  const sdir = join(dir, 'cfg', 'projects', resolve('.').replace(/[^a-zA-Z0-9]/g, '-'));
+  mkdirSync(sdir, { recursive: true });
+  const SID = 'aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb';
+  const jl = (o) => JSON.stringify(o);
+  writeFileSync(join(sdir, `${SID}.jsonl`), [
+    jl({ type: 'permission-mode', mode: 'x' }),
+    jl({ type: 'user', message: { content: '<command-name>/x</command-name>' } }),
+    jl({ type: 'user', message: { content: 'primeira pergunta' } }),
+    jl({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'segredo interno' }, { type: 'text', text: 'resposta um' }, { type: 'tool_use', name: 'Bash', input: { command: 'ls' } }] } }),
+    jl({ type: 'user', message: { content: [{ type: 'tool_result', content: 'a\nb' }] } }),
+    jl({ type: 'user', isSidechain: true, message: { content: 'subagente' } }),
+    'linha quebrada {',
+  ].join('\n'));
+  writeFileSync(join(sdir, 'nao-e-uuid.jsonl'), '{}');
+  const sl = await (await post('/sessions', {})).json();
+  ok(sl.sessions.length === 1 && sl.sessions[0].id === SID && sl.sessions[0].title === 'primeira pergunta', 'ponte: /sessions lista a conversa com o 1º prompt como título (ignora comando e nome inválido)');
+  const tr = await (await post('/transcript', { session: SID })).json();
+  ok(tr.events.length === 4, 'ponte: /transcript devolve só user/assistant da conversa principal');
+  ok(!JSON.stringify(tr).includes('segredo interno') && !JSON.stringify(tr).includes('subagente'), 'ponte: /transcript não vaza pensamento nem subagente');
+  ok((await post('/transcript', { session: '../../etc/passwd' })).status === 400, 'ponte: /transcript recusa id que não é UUID');
+  ok((await post('/transcript', { session: 'cccccccc-1111-2222-3333-dddddddddddd' })).status === 404, 'ponte: /transcript de conversa inexistente → 404');
+  ok((await post('/transcript', { session: SID }, { origin: ORIGIN, 'content-type': 'application/json' })).status === 401, 'ponte: /transcript sem token → 401');
+  ok((await post('/sessions', {}, { ...good, origin: 'https://evil.test' })).status === 403, 'ponte: /sessions com Origin errado → 403');
 
   const ctrl = new AbortController();
   const s = await fetch(`${base}/chat`, { method: 'POST', headers: good, body: JSON.stringify({ prompt: 'dorme' }), signal: ctrl.signal });

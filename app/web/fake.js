@@ -388,6 +388,37 @@ class FakePane {
 
 const bridge = { base: null, token: null, cwd: null };
 const CODE_RE = /^(\d{1,5})\.([A-Za-z0-9_-]{20,64})$/;
+
+// Um deploy recarrega a página, e sem isso o código da ponte (e a conversa do claude) se perderia a cada
+// versão nova. sessionStorage vive só naquela aba e some ao fechá-la; o token já estava ao alcance de
+// qualquer script da página, então guardá-lo aqui não amplia o que um XSS alcançaria.
+const BRIDGE_KEY = 'local-bridge';
+function saveBridge() {
+  try {
+    sessionStorage.setItem(BRIDGE_KEY, JSON.stringify({ code: `${new URL(bridge.base).port}.${bridge.token}`, cwd: bridge.cwd }));
+  } catch {
+    // sem storage: a pessoa só precisará colar o código de novo depois de recarregar
+  }
+}
+function forgetBridge() {
+  bridge.base = bridge.token = null;
+  try {
+    sessionStorage.removeItem(BRIDGE_KEY);
+  } catch {
+    // ignora
+  }
+}
+try {
+  const saved = JSON.parse(sessionStorage.getItem(BRIDGE_KEY) ?? 'null');
+  const m = typeof saved?.code === 'string' ? CODE_RE.exec(saved.code) : null;
+  if (m) {
+    bridge.base = `http://127.0.0.1:${m[1]}`;
+    bridge.token = m[2];
+    bridge.cwd = typeof saved.cwd === 'string' ? saved.cwd : '';
+  }
+} catch {
+  // storage indisponível ou conteúdo inválido: começa desconectado
+}
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function connectBridge(code) {
@@ -407,6 +438,8 @@ async function connectBridge(code) {
   bridge.base = base;
   bridge.token = m[2];
   bridge.cwd = typeof info.cwd === 'string' ? info.cwd : '';
+  saveBridge();
+  return info;
 }
 
 // Comando de uma linha que baixa a ponte do próprio chat e só a executa se o SHA-256 bater. O hash é
@@ -438,6 +471,7 @@ const dirName = (p) => (p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p || 'L
 function setBridgeCwd(next) {
   if (typeof next !== 'string' || !next || next === bridge.cwd) return;
   bridge.cwd = next;
+  saveBridge();
   for (const pane of localPanes) pane.cwdChanged();
 }
 
@@ -459,6 +493,7 @@ function resultText(content) {
 const LOCAL_CMDS = [
   ['/help', 'lista os comandos do painel'],
   ['/clear', 'limpa a tela e começa uma conversa nova'],
+  ['/resume', 'lista as conversas desta pasta; /resume N abre a de número N'],
   ['/sair', 'desconecta da ponte'],
   ['/compact', 'resume a conversa (vai ao claude)'],
   ['/cost', 'custo da sessão (vai ao claude)'],
@@ -481,13 +516,32 @@ function commonPrefix(list) {
 }
 
 class LocalPane {
+  // id da conversa do claude: fica no sessionStorage (por painel) para sobreviver ao recarregamento
+  get session() {
+    try {
+      const v = sessionStorage.getItem(this.skey);
+      return v && UUID_RE.test(v) ? v : null;
+    } catch {
+      return null;
+    }
+  }
+
+  set session(v) {
+    try {
+      if (v) sessionStorage.setItem(this.skey, v);
+      else sessionStorage.removeItem(this.skey);
+    } catch {
+      // ignora
+    }
+  }
+
   constructor(root, cfg, onBack) {
+    this.skey = `local-session:${cfg.initialTitle}`;
     this.alive = true;
     this.history = [];
     this.histPos = -1;
     this.draft = '';
     this.busy = false;
-    this.session = null;
     this.cost = 0;
     this.ctrl = null;
     this.frame = 0;
@@ -537,7 +591,7 @@ class LocalPane {
     this.tick = setInterval(() => this.animate(), 130);
 
     localPanes.add(this);
-    if (bridge.base) this.ready();
+    if (bridge.base) this.resume();
     else this.askCode();
     this.input.focus();
   }
@@ -552,7 +606,7 @@ class LocalPane {
   line(cls) {
     const el = h('div', cls ? `line ${cls}` : 'line');
     this.out.append(el);
-    while (this.out.childElementCount > 400) this.out.firstElementChild.remove();
+    while (this.out.childElementCount > 1500) this.out.firstElementChild.remove();
     this.out.scrollTop = this.out.scrollHeight;
     return el;
   }
@@ -582,6 +636,7 @@ class LocalPane {
     if (!this.alive || this.mode !== 'chat') return;
     this.setTitle();
     this.session = null;
+    this.sessionList = null;
     this.note(`Pasta agora: ${bridge.cwd} · próxima pergunta abre uma conversa nova`, 'dim indent');
   }
 
@@ -619,14 +674,34 @@ class LocalPane {
     this.note('A ponte roda o Claude Code com permissão total nessa pasta.', 'dim');
   }
 
-  ready() {
+  // Página recarregada com a ponte já conectada: mostra o painel de imediato e confere a ponte por trás.
+  // Se ela morreu (reiniciada, outra porta), pede o código de novo em vez de falhar na primeira pergunta.
+  async resume() {
+    this.ready(true);
+    try {
+      const info = await connectBridge(`${new URL(bridge.base).port}.${bridge.token}`);
+      if (this.alive && typeof info?.cwd === 'string') setBridgeCwd(info.cwd);
+      const id = this.session;
+      if (this.alive && id && !(await this.loadSession(id, 'Reconectado · conversa anterior retomada'))) {
+        this.session = null; // arquivo sumiu ou é de outra pasta
+      }
+    } catch (err) {
+      forgetBridge();
+      if (!this.alive) return;
+      this.session = null;
+      this.askCode();
+      this.note(`A ponte anterior não respondeu: ${err.message}`, 'err');
+    }
+  }
+
+  ready(resumed = false) {
     this.mode = 'chat';
     this.setTitle();
     this.input.type = 'text';
     this.input.placeholder = 'pergunte algo ou descreva uma tarefa ↵';
     this.out.replaceChildren();
     const l = this.line();
-    l.append(h('span', 'dot', '● '), h('span', null, 'Conectado ao Claude Code local'));
+    l.append(h('span', 'dot', '● '), h('span', null, resumed ? 'Reconectado ao Claude Code local' : 'Conectado ao Claude Code local'));
     this.note('Esc interrompe · permissão total na pasta da ponte', 'dim indent');
     this.note('/ comandos · ! roda no shell · Tab completa · ↑↓ histórico', 'dim indent');
     this.out.append(h('div', 'line gap'));
@@ -730,7 +805,7 @@ class LocalPane {
     if (this.history.length > 100) this.history.shift();
     this.histPos = -1;
     if (text === '/sair') {
-      bridge.base = bridge.token = null;
+      forgetBridge();
       this.session = null;
       return this.askCode();
     }
@@ -740,6 +815,7 @@ class LocalPane {
       this.credits.textContent = '';
       return this.ready();
     }
+    if (text === '/resume' || text.startsWith('/resume ')) return this.resumeCmd(text.slice(7).trim());
     if (text === '/help') {
       this.line('user').append(h('span', 'chev', '› '), h('span', null, text));
       for (const [c, d] of LOCAL_CMDS) this.note(`${c}  ${d}`, 'dim indent');
@@ -749,6 +825,61 @@ class LocalPane {
     }
     if (text.startsWith('!')) return this.runShell(text.slice(1).trim());
     return this.ask(text);
+  }
+
+  // Redesenha a conversa a partir do arquivo que o claude guarda na máquina da pessoa (via ponte): serve
+  // para o recarregamento do deploy e para o /resume, e não depende de nada guardado no navegador.
+  async loadSession(id, announce) {
+    if (!UUID_RE.test(id)) return false;
+    try {
+      const res = await bridgePost('/transcript', { session: id });
+      if (!res.ok) return false;
+      const { events } = await res.json();
+      if (!Array.isArray(events) || !this.alive) return false;
+      this.session = id;
+      this.out.replaceChildren();
+      const l = this.line();
+      l.append(h('span', 'dot', '● '), h('span', null, announce));
+      this.note('Esc interrompe · permissão total na pasta da ponte', 'dim indent');
+      this.out.append(h('div', 'line gap'));
+      for (const ev of events) this.event(ev, true);
+      this.out.append(h('div', 'line gap'));
+      this.out.scrollTop = this.out.scrollHeight;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async resumeCmd(arg) {
+    this.line('user').append(h('span', 'chev', '› '), h('span', null, arg ? `/resume ${arg}` : '/resume'));
+    this.busy = true;
+    try {
+      const n = /^\d{1,2}$/.test(arg) ? Number(arg) : 0;
+      if (!n || !this.sessionList) {
+        const res = await bridgePost('/sessions', {});
+        if (!res.ok) throw new Error(`A ponte respondeu com erro (${res.status}).`);
+        const { sessions } = await res.json();
+        this.sessionList = Array.isArray(sessions) ? sessions.filter((x) => x && UUID_RE.test(x.id)) : [];
+        if (!n) {
+          if (!this.sessionList.length) return this.note('Nenhuma conversa do claude nesta pasta.', 'dim indent');
+          this.sessionList.forEach((x, i) => {
+            const when = new Date(x.mtime).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+            this.note(`${i + 1}. ${when}  ${clip(String(x.title ?? ''), 70)}`, 'dim indent');
+          });
+          return this.note('Digite /resume N para abrir uma delas.', 'dim indent');
+        }
+      }
+      const pick = this.sessionList[n - 1];
+      if (!pick) return this.note('Número fora da lista. Rode /resume para ver as conversas.', 'err');
+      if (!(await this.loadSession(pick.id, `Conversa retomada: ${clip(String(pick.title ?? ''), 60)}`))) {
+        this.note('Não consegui ler essa conversa.', 'err');
+      }
+    } catch (err) {
+      if (this.alive) this.note(err.message || 'Falha na conexão com a ponte.', 'err');
+    } finally {
+      this.busy = false;
+    }
   }
 
   async runShell(command) {
@@ -863,10 +994,10 @@ class LocalPane {
   }
 
   // uma linha NDJSON do `claude -p --output-format stream-json`; tudo aqui é dado externo
-  event(raw) {
+  event(raw, replay = false) {
     let ev;
     try {
-      ev = JSON.parse(raw);
+      ev = typeof raw === 'string' ? JSON.parse(raw) : raw;
     } catch {
       return;
     }
@@ -889,7 +1020,18 @@ class LocalPane {
         }
       }
     } else if (ev.type === 'user') {
-      const blocks = Array.isArray(ev.message?.content) ? ev.message.content : [];
+      const raw = ev.message?.content;
+      const blocks = Array.isArray(raw) ? raw : [];
+      if (replay) {
+        // ao redesenhar uma conversa antiga também aparece o que a pessoa digitou
+        const typed = typeof raw === 'string' ? raw : blocks.map((b) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : '')).join(' ');
+        const t = typed.trim();
+        if (t && !t.startsWith('<')) {
+          this.out.append(h('div', 'line gap'));
+          this.line('user').append(h('span', 'chev', '› '), h('span', null, clip(t, 1000)));
+          this.out.append(h('div', 'line gap'));
+        }
+      }
       for (const b of blocks) {
         if (b?.type !== 'tool_result') continue;
         const lines = resultText(b.content).split('\n').filter((x) => x.trim());

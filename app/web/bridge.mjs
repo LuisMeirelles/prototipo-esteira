@@ -18,9 +18,9 @@ import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { statSync } from 'node:fs';
-import { readdir } from 'node:fs/promises';
+import { open, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, resolve as resolvePath } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
 
 const CLAUDE = process.env.CLAUDE_BIN || 'claude';
 const MAX_BODY = 64 * 1024;
@@ -166,6 +166,124 @@ function shell(res, body, cors) {
   });
 }
 
+// --- histórico das conversas do claude desta pasta ---
+// O claude grava cada conversa em ~/.claude/projects/<pasta com tudo que não é letra/número virando "-">/<uuid>.jsonl.
+// A ponte só lê esses arquivos (o nome vem de um UUID validado, então não há caminho controlado por quem chama)
+// e devolve o que o painel precisa para redesenhar a conversa, sem o resto (pensamento, anexos, telemetria).
+const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
+const MAX_TRANSCRIPT_EVENTS = 400;
+const MAX_TEXT = 4000;
+
+function sessionsDir() {
+  const base = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+  return join(base, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+}
+
+// lê no máximo `max` bytes do começo (ou do fim) do arquivo
+async function readSlice(file, max, fromEnd) {
+  const fh = await open(file, 'r');
+  try {
+    const { size } = await fh.stat();
+    const len = Math.min(size, max);
+    const buf = Buffer.alloc(len);
+    await fh.read(buf, 0, len, fromEnd ? size - len : 0);
+    return { text: buf.toString('utf8'), partial: size > len };
+  } finally {
+    await fh.close();
+  }
+}
+
+function promptText(message) {
+  const c = message?.content;
+  const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((b) => (b?.type === 'text' ? b.text : '')).join(' ') : '';
+  return typeof text === 'string' ? text.trim() : '';
+}
+
+async function sessions(res, cors) {
+  const dir = sessionsDir();
+  let files = [];
+  try {
+    files = (await readdir(dir)).filter((f) => f.endsWith('.jsonl') && UUID.test(f.slice(0, -6)));
+  } catch {
+    return json(res, 200, { sessions: [] }, cors);
+  }
+  const withTime = [];
+  for (const f of files) {
+    try {
+      withTime.push({ id: f.slice(0, -6), mtime: (await stat(join(dir, f))).mtimeMs });
+    } catch {
+      // sumiu no meio da leitura
+    }
+  }
+  withTime.sort((a, b) => b.mtime - a.mtime);
+  const out = [];
+  for (const { id, mtime } of withTime.slice(0, 15)) {
+    let title = '';
+    try {
+      const { text } = await readSlice(join(dir, `${id}.jsonl`), 128 * 1024, false);
+      for (const line of text.split('\n')) {
+        let o;
+        try {
+          o = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (o?.type !== 'user' || o.isSidechain) continue;
+        const t = promptText(o.message);
+        if (t && !t.startsWith('<')) {
+          title = t.replace(/\s+/g, ' ').slice(0, 80);
+          break;
+        }
+      }
+    } catch {
+      // arquivo ilegível: lista sem título
+    }
+    if (title) out.push({ id, mtime, title });
+  }
+  return json(res, 200, { sessions: out }, cors);
+}
+
+async function transcript(res, body, cors) {
+  const id = body?.session;
+  if (typeof id !== 'string' || !UUID.test(id)) return json(res, 400, { error: 'invalid_body' }, cors);
+  let slice;
+  try {
+    slice = await readSlice(join(sessionsDir(), `${id}.jsonl`), MAX_TRANSCRIPT_BYTES, true);
+  } catch {
+    return json(res, 404, { error: 'not_found' }, cors);
+  }
+  const lines = slice.text.split('\n');
+  if (slice.partial) lines.shift(); // primeira linha do trecho pode estar cortada ao meio
+  const clipStr = (v) => (typeof v === 'string' && v.length > MAX_TEXT ? `${v.slice(0, MAX_TEXT)}…` : v);
+  const events = [];
+  for (const line of lines) {
+    let o;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if ((o?.type !== 'user' && o?.type !== 'assistant') || o.isSidechain || !o.message) continue;
+    const c = o.message.content;
+    let content;
+    if (typeof c === 'string') content = clipStr(c);
+    else if (Array.isArray(c)) {
+      content = c
+        .filter((b) => b && ['text', 'tool_use', 'tool_result'].includes(b.type))
+        .map((b) => ({
+          type: b.type,
+          text: clipStr(b.text),
+          name: b.name,
+          input: b.type === 'tool_use' ? { command: clipStr(b.input?.command), file_path: b.input?.file_path, pattern: b.input?.pattern, path: b.input?.path, url: b.input?.url, description: clipStr(b.input?.description) } : undefined,
+          content: b.type === 'tool_result' ? (typeof b.content === 'string' ? clipStr(b.content) : Array.isArray(b.content) ? b.content.map((x) => ({ text: clipStr(x?.text) })) : '') : undefined,
+          is_error: b.is_error,
+        }));
+    } else continue;
+    events.push({ type: o.type, message: { content } });
+  }
+  return json(res, 200, { events: events.slice(-MAX_TRANSCRIPT_EVENTS) }, cors);
+}
+
 const server = createServer(async (req, res) => {
   const port = server.address().port;
   if (req.headers.origin !== origin) return json(res, 403, { error: 'forbidden' });
@@ -190,7 +308,7 @@ const server = createServer(async (req, res) => {
   if (req.method === 'GET' && path === '/health') {
     return json(res, 200, { ok: true, cwd }, cors);
   }
-  if (req.method !== 'POST' || !['/chat', '/shell', '/complete'].includes(path)) {
+  if (req.method !== 'POST' || !['/chat', '/shell', '/complete', '/sessions', '/transcript'].includes(path)) {
     return json(res, 404, { error: 'not_found' }, cors);
   }
 
@@ -201,6 +319,8 @@ const server = createServer(async (req, res) => {
     return json(res, 400, { error: 'invalid_body' }, cors);
   }
   if (path === '/complete') return complete(res, body, cors);
+  if (path === '/sessions') return sessions(res, cors);
+  if (path === '/transcript') return transcript(res, body, cors);
   if (path === '/shell') return shell(res, body, cors);
   const prompt = body?.prompt;
   const session = body?.session ?? null;
